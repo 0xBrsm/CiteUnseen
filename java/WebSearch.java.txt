@@ -121,7 +121,7 @@ public class WebSearch {
 		return obj;
 	}
 	
-	public static void exportCache(Object obj, String path) {
+	public static boolean exportCache(Object obj, String path) {
 		System.out.print("Saving cache...");
 		long startTime = System.nanoTime();		
 		
@@ -134,48 +134,23 @@ public class WebSearch {
 			long endTime = System.nanoTime();
 			long duration = endTime - startTime;
 			System.out.println("complete! ("+TimeUnit.MILLISECONDS.convert(duration, TimeUnit.NANOSECONDS)/1000.0+"s)");
-			
 		} catch (IOException e) {
 			System.out.println("failed! "+e.getMessage());
+			return false;
 		}
-	}
-	
-	// for converting cache, probably not needed anymore
-	//
-	@SuppressWarnings("unchecked")
-	public static void convertCache(String path) throws Exception {
-		String query = "";
-	
-		FileInputStream dat = new FileInputStream(path);
-		ObjectInputStream input = new ObjectInputStream(dat);
-		
-		ArrayList<String> serpStrings = (ArrayList<String>)input.readObject();
-		HashMap<String, String> serps = new HashMap<>();
-		JsonParser parser = new JsonParser();
-
-		System.out.println("Converting from array of Strings to Map...");
-		for (String serp : serpStrings) {
-			JsonObject json = parser.parse(serp).getAsJsonObject();
-			if (path.contains(".Google."))
-				query = json.getAsJsonObject("queries").getAsJsonArray("request").get(0).getAsJsonObject().getAsJsonPrimitive("searchTerms").getAsString();
-			else if (path.contains(".Bing."))
-				query = json.getAsJsonObject("d").getAsJsonArray("results").get(0).getAsJsonObject().getAsJsonObject("__metadata").getAsJsonPrimitive("uri").getAsString();
-			String ngram = query.substring(query.indexOf("\"")+1, query.lastIndexOf("\""));
-			serps.put(ngram, serp);
-		}
-		exportCache(serps, path);
+		return true;
 	}
 
 	// Main function, perform search
 	//	
 	public Map<String, String> search (SourceText sourceText) throws Exception {
-		Map<String, NGram> nGrams = sourceText.getNGrams();
+		Set<String> nGrams = sourceText.getNGrams().keySet();
 		Map<String, String> serps = new HashMap<String, String>();
 
 			if (engine == Engine.Google)
 				throw new Exception("Web search currently unavailable.");
 
-			System.out.println("Searching "+engine+" for "+nGrams.values().size()+" ngrams...");
+			System.out.println("Searching "+engine+" for "+nGrams.size()+" ngrams...");
 			
 			ExecutorService executor = Executors.newFixedThreadPool(maxConnections);
 			PoolingHttpClientConnectionManager manager = new PoolingHttpClientConnectionManager();
@@ -183,15 +158,14 @@ public class WebSearch {
 			manager.setDefaultMaxPerRoute(maxConnections);
 			CloseableHttpClient httpClient = HttpClients.custom().setConnectionManager(manager).build();
 			
-			Map<String, Future<String>> tmp = new HashMap<>();
+			Map<String, Future<String>> futures = new HashMap<>();
 			
 			int id = 0;
-			int total = nGrams.values().size();
-			for (NGram nGram : nGrams.values()) {
-				String ngram = nGram.toString();
+			int total = nGrams.size();
+			for (String ngram : nGrams) {
 				HttpGet httpGet = getHttpGet(ngram, id);
 				SearchThread thread = new SearchThread(httpClient, httpGet, id, total);
-				tmp.put(ngram, executor.submit(thread));
+				futures.put(ngram, executor.submit(thread));
 				id++;
 			}
 			executor.shutdown();
@@ -199,15 +173,14 @@ public class WebSearch {
 			
 			// Stupid hack because I can't serialize Futures
 			// FIXME, can I just do serps = new Map<String, String>(tmp); ??
-			for (Map.Entry<String, Future<String>> entry : tmp.entrySet()) {
+			for (Map.Entry<String, Future<String>> entry : futures.entrySet()) {
 				String json = entry.getValue().get();
 				serps.put(entry.getKey(), json);
 			}
 			System.out.println();
 			httpClient.close();
 			System.out.println("Searching completed. All http connections closed.");
-		
-
+			
 		return serps;
 	}
 	
@@ -240,7 +213,6 @@ public class WebSearch {
 				headerName = "Accept";
 				headerValue = "application/json";
 				query = "%22"+query.replaceAll(" ","+")+"%22";
-				searchURL = "https://www.googleapis.com/customsearch/v1?key="+key+"&cx="+cx+"&q="+query+"&alt=json";
 				searchURL = "https://www.googleapis.com/customsearch/v1?key="+key+"&cx="+cx+"&q="+query+"&alt=json";
 					
 				break;

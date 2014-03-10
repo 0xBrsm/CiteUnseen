@@ -11,29 +11,37 @@
 
 package citeunseen;
 
-import java.io.*;
-import java.util.*;
-import java.util.concurrent.*; 
-import org.apache.lucene.analysis.tokenattributes.*;
+import java.io.File;
+import java.io.IOException;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Set;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+
 import org.apache.commons.fileupload.FileItem;
 import org.apache.commons.fileupload.disk.DiskFileItemFactory;
 import org.apache.commons.fileupload.servlet.ServletFileUpload;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.FilenameUtils;
 
+import org.apache.lucene.analysis.tokenattributes.*;
+
 public class SubmissionHandler extends HttpServlet {
   
 	@Override
 	protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-		// Start timer, debug
-		long startTime = System.nanoTime();	
+		// space in log for readability
+		Dev.out.println();
 	
-		//process only if its multipart content
+		// Start timer, debug
+		Timer timer = new Timer("SubmissionHandler");
+	
+		//process only multipart content
 		if (ServletFileUpload.isMultipartContent(request)) {
 			try {
 				File tmp = new File(".");				
@@ -52,66 +60,59 @@ public class SubmissionHandler extends HttpServlet {
 						file = item;
 					}
 				}
-				if (file == null) throw new IOException("File upload missing.");
+				if (file == null) throw new Exception("File upload missing.");
 				
-				String[] results = processSubmission(file, options);
-				request.setAttribute("results", results[0]);
-				request.setAttribute("highlights", results[1]);
+				Map<String, String> results = processSubmission(file, options);
+				request.setAttribute("results", results.get("summary"));
+				request.setAttribute("highlights", results.get("markedText"));
 				
 			} catch (Exception e) {
 				request.setAttribute("results", "File processing failed: " + e.getMessage());
 				e.printStackTrace();
 			}
-		} else request.setAttribute("results", "Sorry this Servlet only handles file upload requests.");
+		} else request.setAttribute("results", "Not a file or file corrupt.");
 		
 		request.getRequestDispatcher("/results.jsp").forward(request, response);
 
 		// End our timer and output time to run, debug
 		//
-		long duration = System.nanoTime() - startTime;
-		System.out.println("Total run time: "+TimeUnit.MILLISECONDS.convert(duration, TimeUnit.NANOSECONDS)/1000.0+"s ");		
+		timer.stop();
+	
     }
 
 	@SuppressWarnings("unchecked")	
-	public String[] processSubmission (FileItem fileItem, Map<String, String> options) throws Exception {
+	public Map<String, String> processSubmission (FileItem fileItem, Map<String, String> options) throws Exception {
 		// -- Static defaults - these cannot be changed by the user
 		String cacheDir = "."+File.separator+"Documents"+File.separator;
-		
-		boolean saveLocalCopy = true;		// default, save a local copy of the document
-		boolean useCache = true;			// default, use cache if present - if not, search and save cache
-		Engine engine = Engine.Google;		// default search engine
-		
-		// -- Initial defaults - these can be changed by the user
-		int urlThreshold = 1;				// default minimum number of ngrams matched
-		int wordThreshold = 5;				// default minimum number of words in a row to count for scoring
-		int minScore = 8;					// default minimum document score to consider
-		int n = 3;							// default number of tokens		
-		boolean scoreByRarity = false;		// default, do not use the total results of an ngram to determine its worth
-		boolean snippetSearch = false;		// default, do not search snippets for ngram matches		
-		// --
+		Cache useCache = Cache.USE;			// default, use cache if present - if not, search and save cache		
+		boolean saveLocalCopy = true;		// default, save a local copy of the document			
 
+		// File/data locator paths
 		String baseDir = "."+File.separator+"Documents"+File.separator;
 		String fileName = FilenameUtils.getName(fileItem.getName()); 		// Extra nonsense courtesy of IE
 		String fileRoot = fileName.substring(0, fileName.lastIndexOf("."));
 		String fileRootPath = baseDir+fileRoot+File.separator+fileRoot;
 		String filePath = baseDir+fileRoot+File.separator+fileName;
-		
+
+		// Save a local copy
 		if (saveLocalCopy) {
 			File document = new File(filePath);
 			if (!document.exists()) {
 				document.getParentFile().mkdirs();
 				fileItem.write(document);
-				System.out.println("Local copy of document saved to "+document.getParentFile());
+				Dev.out.println("Local copy of document saved to "+document.getParentFile());
 			}
 		}
-		
-		System.out.println();
-		System.out.println("Processing "+fileName+"...");
 
-		Processor processor = new Processor(engine.getIndexSize());
+		// Initialize base objects	
+		Processor processor = new Processor();
+		SearchEngine engine = new GoogleSearch();
 		
 		// Get our user options and update our default values, if necessary
 		//
+		int n = 0;							// number of tokens	specified by user
+		boolean ignoreCitations = false;	// ignore citations in matching
+		
 		for (Map.Entry<String, String> entry : options.entrySet()) {
 			String fieldName = entry.getKey();
 			String fieldValue = entry.getValue();
@@ -119,10 +120,7 @@ public class SubmissionHandler extends HttpServlet {
 			switch (fieldName) {
 				case "urlThreshold" :
 					processor.setURLThreshold(Integer.parseInt(fieldValue));
-					break;
-				case "wordThreshold" :
-					processor.setWordThreshold(Integer.parseInt(fieldValue));
-					break;					
+					break;			
 				case "minScore" :
 					processor.setMinimumScore(Integer.parseInt(fieldValue));
 					break;
@@ -132,54 +130,37 @@ public class SubmissionHandler extends HttpServlet {
 				case "scoreByRarity" :
 					processor.setScoreByRarity(Boolean.parseBoolean(fieldValue));
 					break;
+				case "scoringMethod" :
+					processor.setScoringMethod(fieldValue);
+					break;					
 				case "snippetSearch" :
-					snippetSearch = true;
+					engine.setSnippetSearch(Boolean.parseBoolean(fieldValue));
 					break;
+				case "ignoreCitations" :
+					ignoreCitations = Boolean.parseBoolean(fieldValue);
+					break;					
 			}
 		}
 		
-		// Initialize base objects
-		SourceText sourceText = new SourceText(fileItem.getInputStream(), n);
-		WebSearch searcher = new WebSearch(engine);
+		// Create our source text
+		SourceText sourceText = new SourceText(fileItem.getInputStream(), n, ignoreCitations);
+		
+		// Set our hard coded, non-standard defaults
+		engine.setCache(useCache, fileRootPath+"."+n+"."+engine+".dat");			
+
+		// Setup complete...
+		Dev.out.println("Processing "+fileName+"...");
 
 		// Get search results
-		//	Map<String, String> serps = searcher.search(sourceText);
+		Map<String, SearchResult> searchResults = engine.search(sourceText);
 		
-		// Get search results, either from cache or from the web
-		Map<String, String> serps = null;
-		if (useCache) serps = (Map<String, String>) searcher.importCache(fileRootPath+"."+n+"."+engine+".dat");
-		if (serps == null) {
-			serps = searcher.search(sourceText);
-			searcher.exportCache(serps, fileRootPath+"."+n+"."+engine+".dat");
-		}
+		// Use our search results to find all word sequences of any interest
+		Set<Sequence> sequences = processor.process(searchResults, sourceText);
 		
-		// Get a list of url results
-		Collection<URLResult> urlResults = searcher.getURLResults(sourceText, serps, snippetSearch);
-		
-		// Find the best URL for each subsequence in the document
-		Map<Sequence, Sequence> subSequences = processor.findBestSubsequences(sourceText, urlResults);		
-		Map<OffsetAttribute, Sequence> bestMatches = processor.convertToOffsets(sourceText, subSequences);		
-
-/*		// Score all the URLs
-		processor.scoreResults(sourceText, urlResults);
-		
-		// Get our best matches per ngram
-		Map<OffsetAttribute, URLResult> bestMatches = processor.findBestURLMatches(sourceText);
-*/		
-		// Get the overall stats on the matches
-		Collection<URLResult> urlGroupResults = new HashSet<>();
-		for (Sequence sequence : bestMatches.values()) {
-			urlGroupResults.addAll(sequence.getResults());
-		}
-		URLResult urlGroupResult = processor.getSingleResult(sourceText, urlGroupResults);
-		String result = urlGroupResult.getPercent()+"% match with "+urlGroupResult.getResults().size()+" URLs above a score of "+minScore+"."; //bug
-		
-		// Mark all our matches, highlighted as URLs
-		String markedText = processor.markBestMatches(sourceText, bestMatches);
-		
-		// Return our results summary and marked text
-		String[] results = {result, markedText};
-		System.out.println("Results output to client.");
+		// Mark our sequences by their matching URLs in HTML format
+		Map<String, String> results = Builder.getHTMLResults(sequences, sourceText);			
+	
+		Dev.out.println("Results output to client.");
 		
 		return results;
 	}

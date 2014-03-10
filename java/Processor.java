@@ -13,26 +13,20 @@ import java.math.*;
 import org.apache.lucene.analysis.tokenattributes.*;
 
 public class Processor {
-	private long indexSize;					// index size for determining commonality of particular search results
-	private int urlThreshold = 0;			// minimum number of occurrences for a URL to be considered worth checking
-	private int wordThreshold = 0;			// minimum number of words in a row to count toward the overall score of a URL
-	private int minScore = 0;				// minimum score for URL match sequences to be considered significant/displayed to user
+	private int lengthThreshold = 1;		// minimum number of occurrences for a URL to be considered worth checking
+	private int minScore = 1;				// minimum score for URL match sequences to be considered significant/displayed to user
 	private boolean scoreByRarity = true;	// whether to weight the worth of matches by the number of results each returned in the search
-	
-	// Constructor
-	//
-	public Processor (long indexSize) {
-		this.indexSize = indexSize;
-	}
+	private String scoringMethod = "idf";	// default scoring method
+	private boolean fillGaps = true;		// I don't even know what this does yet
+
+	// Remember the search results and url results once processing has begun
+	private Map<String, SearchResult> searchResults = new HashMap<>();
+	private Set<URLResult> urlResults = new HashSet<>();
 	
 	// Setters for config parameters once defaults are established
 	//
 	public void setURLThreshold (int urlThreshold) {
-		this.urlThreshold = urlThreshold;
-	}
-	
-	public void setWordThreshold (int wordThreshold) {
-		this.wordThreshold = wordThreshold;
+		this.lengthThreshold = urlThreshold;
 	}
 	
 	public void setMinimumScore (int minScore) {
@@ -43,79 +37,107 @@ public class Processor {
 		this.scoreByRarity = scoreByRarity;
 	}
 	
-	// full constructor, legacy
-	//
-	public Processor (int urlThreshold, int wordThreshold, int minScore, boolean scoreByRarity) {
-		this.urlThreshold = urlThreshold;
-		this.wordThreshold = wordThreshold;
-		this.minScore = minScore;
-		this.scoreByRarity = scoreByRarity;
-	}
-
-	// Other getters
-	//
-	private double getPercentMatch (SourceText sourceText, URLResult urlResult) {
-		BigDecimal percent = new BigDecimal(100.0 * urlResult.getPositions().size() / sourceText.getNGrams().size()); // there is a bug here
-		percent = percent.setScale(1, RoundingMode.HALF_UP);
-		
-		return percent.doubleValue();
+	public void setScoringMethod (String method) {
+		this.scoringMethod = method;
 	}
 	
-	// internal methods for all the heavy lifting
-	//
-	private double scoreNGram (NGram nGram) {				
-		double v = 1.0;						// default score per match
+	public Set<URLResult> urlResults () {
+		return urlResults;
+	}
+
+	//===========================================================//	
+	// Take our source text and search results as input.
+	// Return the a map between document positions and sequences.
+	//===========================================================//
+	public Set<Sequence> process (Map<String, SearchResult> searchResults, SourceText sourceText) {
+		this.searchResults = searchResults;
+
+		Set<URLResult> urlResults = getByURL(searchResults, sourceText);	
+		Set<Sequence> sequences = findSequences(urlResults);
 		
-		if (scoreByRarity) {	
-			long total = nGram.getTotalResults();
-			if (total == 0) {
-				v = 5.0;
-			} else {
-				// weighted tf-idf option
-				// let's just go with idf, m'kay?
-//				int f = nGram.getPositions().size();
-//				double tf = f / max;
-//				double idf = Math.log10(indexSize / total);
-//				v = tf * idf;
-//				v = idf;
+//		Map<OffsetAttribute, Sequence> offsets = adjustOffsets(convertToOffsets(sequences));
+//		Map<Integer, Sequence> seqByPosition = getByPosition(sequences);
 
-				// flat option
-				v = Math.log(total);		//
-				if (v == 0) v = 5.0;		// avoid divide by 0 if only one match
-				else v = 1 / v;				// set our value for this match to the multiplicative inverse log
-
+		this.urlResults = urlResults;
+	
+		return sequences;
+	}
+	//===========================================================//	
+	
+	//===========================================================//	
+	// Take our search results and create one big master list of 
+	// unique URLs and the ngrams in the document which matched 
+	// with that URL.
+	//
+	private Set<URLResult> getByURL (Map<String, SearchResult> searchResults, SourceText sourceText) {
+		Map<String, URLResult> urlResults = new HashMap<>();
+		for (Map.Entry<String, SearchResult> entry : searchResults.entrySet()) {
+			String ngram = entry.getKey();
+			SearchResult searchResult = entry.getValue();
+			
+			Set<Integer> positions = sourceText.locate(ngram);
+			for (String url : searchResult.urls()) {
+				URLResult urlResult = urlResults.get(url);
+				if (urlResult == null) {
+					urlResult = new URLResult(url, sourceText);
+					urlResults.put(url, urlResult);
+				}
+				urlResult.add(positions);
 			}
-		}	
-		return v;
+		}
+		return new HashSet<URLResult>(urlResults.values());
 	}
+	//===========================================================//		
 	
-	private List<Sequence> buildSequence (SourceText sourceText, URLResult urlResult) {
-		Set<Integer> positions = urlResult.getPositions();
+	//===========================================================//
+	// Find all subsequences of minscore or higher and the urls
+	// that match each of them.
+	//
+	public Set<Sequence> findSequences (SourceFragment fragment) {
+		return findSequences(Collections.singleton(fragment));
+	}
+	public Set<Sequence> findSequences (Set<? extends SourceFragment> fragments) {
+		Map<Sequence, Sequence> subSequences = new HashMap<>();
+		
+		for (SourceFragment fragment : fragments) {
+			List<Sequence> fragmentByWords = buildNumericSequence(fragment);
+			Set<Sequence> fragmentSubsequences = findSubsequences(fragmentByWords);
+						
+			for (Sequence fragmentSubsequence : fragmentSubsequences) {
+				Sequence subSequence = subSequences.get(fragmentSubsequence);
+				if (subSequence == null) {
+					subSequence = fragmentSubsequence;		
+					subSequences.put(subSequence, subSequence);
+				}
+				subSequence.add(fragment);
+				fragment.add(subSequence);
+			}
+		}
+		return subSequences.keySet();
+	}	
+	
+	// Build a word value sequence from the matches of a particular URL
+	// For this, each Sequence object is actually just a value of the 
+	// number of consecutive words and the positions
+	//
+	private List<Sequence> buildNumericSequence (SourceFragment fragment) {
+		SourceText sourceText = fragment.getSourceText();
+		Set<Integer> positions = fragment.positionsInOrder();
 		List<Sequence> seq = new LinkedList<>();
 		
-		// skip URLs that have too few matches
-		if (positions.size() < urlThreshold) return seq;	
+		// skip fragments that have too few positions
+		if (positions.size() < lengthThreshold) return seq;
 		
 		// Build word sequence array
 		// Positives are number of matches in a row, negatives are number of mismatches in a row
 		//
-		List<NGram> nGrams = sourceText.getNGramsByOrder();	
-
-		Sequence sub = new Sequence();
+		Sequence sub = new Sequence(sourceText);
 		int n = sourceText.getN();
 		int p = 0;
 		int last = 0;
 		for (Integer i : positions) {
-			// use the total number of results for this ngram to scale it
-			//  the more results, the less likely we care about this match, so it should count for less
-			//  the fewer results, the more interesting this match is, so it should count for more
-			//
-			NGram nGram = nGrams.get(i);
-			
-			if (nGram.getTotalResults() == 0)
-				System.out.println(nGram+" "+urlResult);
-			
-			double v = scoreNGram(nGram);
+			String ngram = sourceText.get(i);
+			double v = scoreNGram(ngram);
 			
 			int d = i - last;						// distance between this position and the last position
 			p = seq.size() - 1;						// set to previous position		
@@ -126,8 +148,9 @@ public class Processor {
 				sub = seq.get(p);					//  first, get the last value
 				sub.add(v, i);						//	add this value to the sequence
 				d--;								//	decrement d to start at the previous location
-				while (d > 0) {							// now, fill in the gaps for all the ngrams between last and this one
-					v = scoreNGram(nGrams.get(last+d));	// debug as this doesn't make sense for combined URLs
+				if (fillGaps) while (d > 0) {		// now, fill in the gaps for all the ngrams between last and this one
+					ngram = sourceText.get(last+d);	// I'm not really sure what effect this has, though
+					v = scoreNGram(ngram);			
 					sub.add(v, last+d);
 					d--;
 				}
@@ -135,11 +158,11 @@ public class Processor {
 				sub = seq.get(p);
 				sub.addToScore(n-1);				//  so we add n-1 to the previous location in seq to approximate number of words in that subseq
 				
-				sub = new Sequence();
-				sub.addToScore(-1.0*d + n);			//  then add a negative representing the number of words between this position and the last
+				sub = new Sequence(sourceText);
+				sub.addToScore(-0.5*d + n);			//  then add a negative representing the number of words between this position and the last
 				seq.add(sub);
 				
-				sub = new Sequence();				//  finally add a positive to start a new matching sequence at this position
+				sub = new Sequence(sourceText);		//  finally add a positive to start a new matching sequence at this position
 				sub.add(v, i);
 				seq.add(sub);
 			}
@@ -149,457 +172,195 @@ public class Processor {
 			p = seq.size() - 1;					//  set our position to the last position of the sequence
 			seq.get(p).addToScore(n-1);			//  add n-1 to our last subseq of matches to approximate number of words
 		}
-	
 		return seq;
 	}
+	
+	// use the total number of results for this ngram to scale it
+	//  the more results, the less likely we care about this match, so it should count for less
+	//  the fewer results, the more interesting this match is, so it should count for more
+	//
+	private double scoreNGram (String ngram) {		
+		double v = 1.0;						// default score per match
+		
+		if (scoreByRarity) {
+			SearchResult searchResult = searchResults.get(ngram);
+			if (searchResult != null)
+				v = searchResult.getRelativeValue(scoringMethod);		
+		}	
+		return v;
+	}	
 
-	private List<Sequence> findSubsequences (List<Sequence> seq) {		
+	// Find all the subsequences in a sequence
+	//
+	private Set<Sequence> findSubsequences (List<Sequence> seq) {		
 		double next = 0;
 		double current = 0;
 		double score = 0;
 
-		Sequence sub = new Sequence();
-		Sequence val = new Sequence();
-		List<Sequence> subSeq = new LinkedList<>();
+		Sequence sub = null;
+		Sequence val = null;
+		Set<Sequence> subSeq = new HashSet<>();
 		Iterator<Sequence> it = seq.listIterator();
 		while (it.hasNext()) {
 			val = it.next();
-			next = val.getScore();
+			next = val.score();
 			current += next;
+
+			if (sub == null)
+				sub = new Sequence(val.getSourceText());			
 			
-			if (next == 0) {	// possible bug here if 0 is the last element
+			if (next == 0) {
 				it.remove();
-				continue;
 			}
 			if (current > score) {
-				score = current;							// new max
-				sub.merge(val);
+				score = current;			// new max
+				sub.add(val.positions());	// add these positions
 				it.remove();
 			}
-			if (current <= 0 || !it.hasNext()) {			// end of seq
-				if (next < 0) it.remove();					// remove negatives at edge of sequence				
-				if (score > 0) {
-					sub.setScore(score);
-					subSeq.add(sub);
+			if (current <= 0 || !it.hasNext()) {		// end of seq
+				if (next < 0) it.remove();				// remove negatives at edge of sequence				
+				if (score >= minScore) {				// if this subsequence score is at least minScore
+					sub.setScore(score);				//  set the score for this subsequence
+					subSeq.add(sub);					//  and remember it
 				}
-				sub = new Sequence();
+				sub = new Sequence(val.getSourceText());
 				score = current = 0;	
 				if (!it.hasNext()) it = seq.listIterator();	// start over
 			}
 		}	
-
 		return subSeq;
 	}
+	//===========================================================//	
 
-	private int scoreSequence (List<Sequence> seq) {	
-		// now score our document...
-		//
-		// f is our power factor; we raise continuous segments to this power
-		// 	then add them all together for a given url
-		//	then root by this power, this gives more weight to continuous segments
-		double f = 4.0;
-		
-		double next = 0;
-		double current = 0;
-		double score = 0;
-		double totalScore = 0;
-		int finalScore = 0;
-			
-		Iterator<Sequence> it = seq.listIterator();
-		while (it.hasNext()) {					
-			next = it.next().getScore();
-			current += next;
-			
-			if (next == 0) {
-				it.remove();
-				continue;
-			}
-			if (current > score) {
-				score = current;							// new max
-				it.remove();
-			}
-			if (current <= 0 || !it.hasNext()) {			// end of seq
-				if (next < 0) it.remove();					// remove negatives at edge of sequence				
-				if (score >= wordThreshold)
-					totalScore += Math.pow(score, f);
-				score = current = 0;			
-				if (!it.hasNext()) it = seq.listIterator();	// start over
-			}
-		}
-		finalScore = (int)Math.pow(totalScore, 1/f);
+	// OLD	
 
-		return finalScore;
-	}
-
-	// Find all subsequences above our minscore
+	//===========================================================//
+	// Match each sequence to the offsets in the original source
+	// text.
 	//
-	public Map<Sequence, Sequence> findBestSubsequences (SourceText sourceText, Collection<URLResult> urlResults) {
-		Map<Sequence, Sequence> subSequences = new HashMap<>();
+/*	private Map<OffsetAttribute, Sequence> convertToOffsets (Set<Sequence> sequences) {
+		Map<OffsetAttribute, Sequence> offsets = new HashMap<>();
 		
-		for (URLResult urlResult: urlResults) {
-			List<Sequence> urlSequence = buildSequence(sourceText, urlResult);
-			List<Sequence> urlSubsequences = findSubsequences(urlSequence);
-		
-			for (Sequence urlSubsequence : urlSubsequences) {
-				if (urlSubsequence.getScore() < minScore) {
-					continue;
-				}
-				Sequence subSequence = subSequences.get(urlSubsequence);
-				if (subSequence == null)
-					subSequence = urlSubsequence;
-				subSequence.addResult(urlResult);
-				subSequences.put(subSequence, subSequence);
-			}
-		}
-		return subSequences;
-	}
-
-	public Map<OffsetAttribute, Sequence> convertToOffsets (SourceText sourceText, Map<Sequence, Sequence> subSequences) {
-		Map<OffsetAttribute, Sequence> bestMatches = new HashMap<>();
-		List<OffsetAttribute> offsets = sourceText.getOffsets();
-
-		for (Sequence subSequence : subSequences.keySet()) {
-			Set<URLResult> urlMatches = subSequence.getResults();
-
-			for (Integer i : subSequence.getPositions()) {
-				OffsetAttribute offset = offsets.get(i);
-				Sequence currentMatch = bestMatches.get(offset);
-				if (currentMatch != null) {
-					if (currentMatch.getScore() > subSequence.getScore())
-						subSequence = currentMatch;
-				}
-				bestMatches.put(offset, subSequence);
-			}
-		}
-		return bestMatches;
-	}
-	
-	public Map<OffsetAttribute, URLResult> convertToOffsetsAndURLs (SourceText sourceText, Map<Sequence, Sequence> subSequences) {
-		Map<OffsetAttribute, URLResult> bestMatches = new HashMap<>();
-		List<OffsetAttribute> offsets = sourceText.getOffsets();
-
-		for (Sequence subSequence : subSequences.keySet()) {
-			Set<URLResult> urlMatches = subSequence.getResults();
-
-			for (Integer i : subSequence.getPositions()) {
-				OffsetAttribute offset = offsets.get(i);
-				URLResult bestMatch = subSequence.getBestResult();				
-				URLResult currentMatch = bestMatches.get(offset);
-				if (currentMatch != null) {
-					if (currentMatch.size() > bestMatch.size())
-						bestMatch = currentMatch;
-				}
-				bestMatches.put(offset, bestMatch);
-			}
-		}
-		return bestMatches;
-	}
-	
-	// Mark all the best Sequences in the set of NGrams
-	//
-	public String markBestMatches (SourceText sourceText, Map<OffsetAttribute, Sequence> bestMatches) {
-		String text = sourceText.toString();
-		List<OffsetAttribute> offsets = sourceText.getOffsets();		
-		
-		int i = 0;
-		int last = 0;
-		String lastURL = "";
-		StringBuilder builder = new StringBuilder();
-		Map<String, String> colorMap = new HashMap<>();
-		for (OffsetAttribute offset : offsets) {		
-			Sequence subSequence = bestMatches.get(offset);			
-			if (subSequence == null) continue;
+		for (Sequence sequence : sequences) {
+			int last = -1;
+			int offsetStart = -1;
+			int offsetEnd = -1;	
 			
-			int start = offset.startOffset();
-			int end = offset.endOffset();			
-			
-			URLResult urlResult = subSequence.getBestResult();
-			String url = urlResult.toString();
-			int score = (int)subSequence.getScore();
-			int total = subSequence.size();
+			for (Integer position : sequence.positionsInOrder()) {
+				if (offsetStart < 0)
+					offsetStart = sourceText.startOffset(position);
+				else if (position - last > sourceText.getN()) {
+					offsetEnd = sourceText.endOffset(last);
+					OffsetAttribute offset = new OffsetAttributeImpl();
+					offset.setOffset(offsetStart, offsetEnd);
+					offsets.put(offset, sequence);
 					
-			if (start == end) continue; //debug - why?
-			
-			if ((start >= last) || (start < last && url != lastURL)) {						// add all our text since the last match
-				builder.append("</a></span>");
-				
-				if (start > last) builder.append(text.substring(last, start));
-				else start = last;
-				
-				String color = colorMap.get(url);											// get this URLs color, if it has one
-				if (color == null) {
-					color = randomColor();													// else, generate a random HTML color
-					colorMap.put(url, color);												// and save it for later
+					offsetStart = sourceText.startOffset(position);
 				}
-				String urls = "";
-				for (URLResult result : subSequence.getResults())
-					urls += result.toString()+"\n";
-				String href = 
-					"<span style='background-color:"+color+"'>"
-					+"<a href="+url															// build an HTML link
-					+" style='font-weight: bold; text-decoration: none'"					// configure style
-					+" target=_blank"														// open in separate window
-					+" title='Score of "+score+" with "+total+" matches\n"+urls+"'>";		// add info in alt text
-				builder.append(href);														// append it to our builder
-			} else start = last;
-			builder.append(text.substring(start, end));
-			last = end;
-			lastURL = url;
-			i++;
-		}
-		builder.append("</a></span>"+text.substring(last));
-
-		return builder.toString();
-	}
-	
-	// Find the best URL for each ngram's precise document location
-	// This will prefer the URL matched by the previous ngram, if this
-	// ngram shares that same URL
-	//
-	public Map<OffsetAttribute, URLResult> findBestURLMatches (SourceText sourceText) {
-		Map<OffsetAttribute, URLResult> bestMatches = new HashMap<>();
-		List<NGram> nGrams = sourceText.getNGramsByOrder();
-		List<OffsetAttribute> offsets = sourceText.getOffsets();
-
-		URLResult lastMatch = new URLResult("");
-		for (int i = 0; i < nGrams.size(); i++) {
-			NGram nGram = nGrams.get(i);
-			Set<URLResult> urlResults = nGram.getResults();
-			
-			// check if this ngram has any results
-			if (urlResults.size() == 0)
-				continue;
-
-			// if it does, find the most promising result
-			URLResult bestMatch = null;
-			if (urlResults.contains(lastMatch))
-					bestMatch = lastMatch;
-			else	bestMatch = nGram.getBestResult();
-
-			if (bestMatch.getScore() >= minScore) {				// there may be no urls which exceed the minimum score
-				lastMatch = bestMatch;							// remember this match for the next ngram
-				bestMatches.put(offsets.get(i), bestMatch);		// and add the offsets to the map with this url
-			}			
-		}
-		return bestMatches;
-	}	
-	
-	// Find the highest ranked URL for each NGram's precise document location
-	// There should be a way to prefer URLs around this ngram to make things less "lumpy"
-	//
-	public Map<OffsetAttribute, URLResult> findBestURLMatchesOld (SourceText sourceText) {
-		Map<OffsetAttribute, URLResult> bestMatches = new HashMap<>();
-		Collection<NGram> nGrams = sourceText.getNGrams().values();
-		
-		for (NGram nGram : nGrams) {
-			Set<URLResult> urlResults = nGram.getResults();
-			URLResult bestMatch = null;
-			
-			int topScore = minScore;								// skip urls with scores below the minimum score
-			for (URLResult urlResult : nGram.getResults()) {
-				int score = (int)urlResult.getScore();
-				if (score > topScore) {
-					bestMatch = urlResult;
-					topScore = score;
-				}
+				last = position;
 			}
-			if (bestMatch != null) {								// there may be no urls which exceed the minimum score
-				nGram.setBestResult(bestMatch);						// if there are, set the best match for this ngram
-				for (OffsetAttribute offset : nGram.getOffsets()) 	// and add the offsets to the map with this url
-					bestMatches.put(offset, bestMatch);		
+			if (last >= 0) {
+				offsetEnd = sourceText.endOffset(last);
+				OffsetAttribute offset = new OffsetAttributeImpl();
+				offset.setOffset(offsetStart, offsetEnd);
+				offsets.put(offset, sequence);
 			}
 		}
-		return bestMatches;
+		return offsets;
 	}
-	
-	// Randomly generates HTML color codes for darker colors.
-	private static String randomColor(){
-		String code = "#"+Integer.toHexString((int)(Math.random()*4+12))+Integer.toHexString((int)(Math.random()*4+12))+Integer.toHexString((int)(Math.random()*4+12));
 
-		return code;
-	}
+	//===========================================================//
 	
-	// Mark all the best URLs in the set of NGrams
+	//===========================================================//
+	// Adjust the start and end of each sequence as necessary to
+	// avoid overlaps.
 	//
-	public String markBestURLMatches (SourceText sourceText, Map<OffsetAttribute, URLResult> bestMatches) {
-		String text = sourceText.toString();
-		List<OffsetAttribute> offsets = sourceText.getOffsets();		
-/*	Old way		
-		List<OffsetAttribute> offsets = new ArrayList<>(bestMatches.keySet());
-		
+	private static Map<OffsetAttribute, Sequence> adjustOffsets (Map<OffsetAttribute, Sequence> offsetsMap) {	
 		// Sort our list of offsets by start position
 		//	 using an anonymous comparator
-		Collections.sort(offsets, 
+		TreeMap<OffsetAttribute, Sequence> offsets = new TreeMap<>( 
 			new Comparator<OffsetAttribute>() {
 				public int compare (OffsetAttribute offset1, OffsetAttribute offset2) {
 					return offset1.startOffset() - offset2.startOffset();
 				}
 			}
 		);
-*/		
-		int i = 0;
+		
+		offsets.putAll(offsetsMap);
+		
 		int last = 0;
-		String lastURL = "";
-		StringBuilder builder = new StringBuilder();
-		Map<String, String> colorMap = new HashMap<>();
-		for (OffsetAttribute offset : offsets) {
+		Sequence lastSequence = null;
+		OffsetAttribute lastOffset = null;
+		
+		Map<OffsetAttribute, Sequence> adjustedOffsets = new TreeMap<>(offsets.comparator());
+		for (Map.Entry<OffsetAttribute, Sequence> entry : offsets.entrySet()) {
+			OffsetAttribute offset = entry.getKey();
+			Sequence sequence = entry.getValue();
+
 			int start = offset.startOffset();
 			int end = offset.endOffset();
 			
-			URLResult urlResult = bestMatches.get(offset);			
-			if (urlResult == null) continue;
-			
-			String url = urlResult.toString();
-			int score = (int)urlResult.getScore();
-			int total = urlResult.getMatches().size();
-					
-			if (start == end) continue; //debug - why?
-			
-			if ((start >= last) || (start < last && url != lastURL)) {						// add all our text since the last match
-				builder.append("</a></span>");
+			if (start < last) {
+				if (lastSequence.score() > sequence.score())
+					start = last;
+				else if (lastSequence.score() == sequence.score() && lastSequence.size() > sequence.size())
+					start = last;
+				else last = start;
 				
-				if (start > last) builder.append(text.substring(last, start));
-				else start = last;
+				int lastStart = lastOffset.startOffset();				
+				if (lastStart >= last)						// the sequence has been totally covered
+					adjustedOffsets.remove(lastOffset);		// remove it from the list
+				else lastOffset.setOffset(lastStart, last);
 				
-				String color = colorMap.get(url);											// get this URLs color, if it has one
-				if (color == null) {
-					color = randomColor();													// else, generate a random HTML color
-					colorMap.put(url, color);												// and save it for later
+				if (start < end) {		
+					offset.setOffset(start, end);
+					adjustedOffsets.put(offset, sequence);
 				}
-				String href = 
-					"<span style='background-color:"+color+"'>"
-					+"<a href="+url															// build an HTML link
-					+" style='font-weight: bold; text-decoration: none'"					// configure style
-					+" target=_blank title='Score of "+score+" with "+total+" matches'>";	// open in separate window
-				builder.append(href);														// append it to our builder
-			} else start = last;
-			builder.append(text.substring(start, end));
-			last = end;
-			lastURL = url;
-			i++;
-		}
-		builder.append("</a></span>"+text.substring(last));
-
-		return builder.toString();
-	}
-
-	// scoring crap
-	
-	// This is for per-URL scoring
-	private int scoreResult (SourceText sourceText, URLResult urlResult) {
-		List<Sequence> sequence = buildSequence(sourceText, urlResult);
-		int score = scoreSequence(sequence);
-		
-		return score;
-	}
-
-	// public methods for getting results and manipulating URLs
-	//
-	public void scoreResults (SourceText sourceText, Collection<URLResult> urlResults) {
-		System.out.println("Scoring "+urlResults.size()+" distinct URLs...");	
-		for (URLResult urlResult : urlResults) {
-			urlResult.setPercent(getPercentMatch(sourceText, urlResult));		
-			urlResult.setScore(scoreResult(sourceText, urlResult));
-		}
-	}	
-	
-	public URLResult getSingleResult (SourceText sourceText, Collection<URLResult> urlResults) {
-		URLResult urlCombo = combine(urlResults);
-		urlCombo.setPercent(getPercentMatch(sourceText, urlCombo));		
-		
-		return urlCombo;
-	}
-	
-	// static method to combine a set of results into a single result
-	// can be a blank URL or a provided URL
-	//
-	public static URLResult combine (Collection<URLResult> urlResults) {
-		return combine("", urlResults);		// no particular site
-	}
-	
-	public static URLResult combine (String url, Collection<URLResult> urlResults) {
-		URLResult combinedResult = new URLResult(url);
-		
-		for (URLResult urlResult : urlResults) {
-			combinedResult.add(urlResult.getMatches());
-			combinedResult.addResult(urlResult);
-		}
-		
-		return combinedResult;
-	}	
-	
-	//	
-	
-	
-	// not really used
-	
-	// Output all our unique and interesting URLs, along with the score and total number of matches
-	//
-	public void output (Collection<URLResult> urlResults, String root) throws IOException {
-		String path = root+".csv";
-		
-		String topURL = "";
-		Set<Integer> topURLMatches = new TreeSet<>();
-	
-		PrintWriter writer = new PrintWriter(path, "UTF-8");
-		
-		int total = 0;	// total number of URLs worth processing
-		for (URLResult urlResult : urlResults) {
-			String url = urlResult.toString();
-			Set<Integer> positions = urlResult.getPositions();
+			} else adjustedOffsets.put(offset, sequence);
 			
-			if (positions.size() < urlThreshold)
-				continue;
-
-			total++;
-			if (positions.size() > topURLMatches.size()) {
-				topURLMatches = positions;
-				topURL = url;
-			}
-			writer.println("\""+urlResult.getScore()+"\",\""+positions.size()+"\",\""+positions+"\",\""+url+"\"");
-		}
-		writer.close();
-
-		System.out.println("Processing "+total+" significant URLs...");
-		System.out.println("Results output to "+path+".");
-		System.out.println("Most likely URL with "+topURLMatches.size()+" matches:");
-		System.out.println(topURL);
-	}	
-	
-	// Mark all the word matches between the original text and the passed list of ngrams
-	//
-	public String markMatches (SourceText sourceText, Set<NGram> matches) {
-		String text = sourceText.toString();	
-		List<Integer> starts = new ArrayList<>();
-		List<Integer> ends = new ArrayList<>();
-		
-		for (NGram nGram : matches) {
-			Set<OffsetAttribute> offsets = nGram.getOffsets();
-			for (OffsetAttribute offset : offsets) {
-				starts.add(offset.startOffset());
-				ends.add(offset.endOffset());
-			}
-		}
-		Collections.sort(starts);
-		Collections.sort(ends);
-		
-		int last = 0;
-		StringBuilder builder = new StringBuilder();
-		for (int i = 0; i < starts.size(); i++) {
-			int start = starts.get(i);
-			int end = ends.get(i);
-			
-			if (start == end) continue;
-
-			if (start < last) start = last;
-			else if (start >= last) builder.append("</b>"+text.substring(last, start)+"<b>");
-			builder.append(text.substring(start, end));
+			lastSequence = sequence;
+			lastOffset = offset;
 			last = end;
 		}
-		builder.append("</b>"+text.substring(last));
-
-		return builder.toString();
-	}	
+StringBuilder builder = new StringBuilder();
+for (OffsetAttribute offset : offsets.keySet()) {
+	builder.append(offset.startOffset()+","+offset.endOffset());
+	builder.append(System.lineSeparator());
+}
+Dev.output(builder, "output.csv");
+		
+		return adjustedOffsets;
+	}
+	//===========================================================//
+	
+/*	private Map<Integer, Sequence> getByPosition (Set<Sequence> subSequences) {
+		Map<Integer, Sequence> bestMatches = new HashMap<>();
+		
+		for (Sequence subSequence : subSequences) {
+			for (Integer position : subSequence.positions()) {
+				Sequence currentMatch = bestMatches.get(position);
+				
+				boolean isNew = false;
+				if (currentMatch == null) isNew = true;
+				else {
+					double currentScore = currentMatch.score();
+					double subScore = subSequence.score();
+					
+					if (currentScore < subScore)
+						isNew = true;
+					else if (currentScore == subScore && currentMatch.size() < subSequence.size())
+						isNew = true;
+				}
+				if (isNew) bestMatches.put(position, subSequence);
+			}	
+		}
+		return bestMatches;
+	}
+	
+	// Convert the ngram positions back to word strings
+	//
+*/
+	//===========================================================//		
 }
 
 

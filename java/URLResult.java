@@ -1,37 +1,33 @@
-package citeunseen;
+/**
+ *  @author Brian St. Marie
+ *  stmarie@fas.harvard.edu
+ *
+ */
 
-import java.util.*;
+package citeunseen;
+ 
+import java.net.URL;
 
 public class URLResult extends SourceFragment {
-	private Set<NGram> matches = new HashSet<>();
 	private final String host;
 			
-	// Constructor and get/set methods
-	public URLResult () {
-		this("");
-	}
-	
-	public URLResult (String url) {
-		super(url);
+	// Constructor
+	public URLResult (String url, SourceText sourceText) {
+		super(url, sourceText);
 		this.host = parseHost(url);
 	}
 	
+	// Get the root URL of this result
 	public String getHost () {
 		return host;
 	}
 	
-	public Set<NGram> getMatches () {
-		return matches;
+	// Get this result as a URL object
+	public URL toURL () throws Exception {	
+		return (new URL(toString()));
 	}
 	
-	// Add the passed nGrams as well as their positions
-	public boolean add (Set<NGram> nGrams) {
-		boolean success = matches.addAll(nGrams);
-		if (success)
-			for (NGram nGram : nGrams) addPositions(nGram.getPositions());
-		return success;
-	}	
-	
+	// Find the root URL of the given URL
 	public static String parseHost (String url) {
 		if (url == null || url == "") return "";
 

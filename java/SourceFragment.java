@@ -2,100 +2,113 @@
  *  @author Brian St. Marie
  *  stmarie@fas.harvard.edu
  *
+ *	Note: this class has a natural ordering that is inconsistent with equals.
  */ 
 
 package citeunseen;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.TreeSet;
+import java.util.List;
 
-public abstract class SourceFragment {
+public class SourceFragment implements TokenizedText, Comparable<SourceFragment> {
 	private final String label;
-	private double score;
-	private double percent;
-	private URLResult bestResult;
-	private Set<URLResult> urlResults = new HashSet<>();
+	private final SourceText sourceText;
+	private Set<SourceFragment> matches;
 	private Set<Integer> positions = new HashSet<>();
 
 	// Constructors
-	public SourceFragment () {
-		this("");
+	public SourceFragment (SourceText sourceText) {
+		this("", sourceText);
 	}
 	
-	public SourceFragment (String label) {
+	public SourceFragment (String label, SourceText sourceText) {
 		this.label = label;
-	}
-	
-	// Setters	
-	public void setScore (double score) {
-		this.score = score;
-	}
-	
-	public void addToScore (double v) {
-		setScore(getScore()+v);
-	}
-	
-	public void setPercent (double percent) {
-		this.percent = percent;
-	}
-	
-	public void setBestResult (URLResult urlResult) {
-		bestResult = urlResult;
+		this.sourceText = sourceText;
 	}
 
-	public boolean addResult (URLResult urlResult) {
-		if (bestResult == null)
-			bestResult = urlResult;
-		else if (urlResult.getPositions().size() > bestResult.getPositions().size())
-			bestResult = urlResult;
-			
-		return urlResults.add(urlResult);
-	}
-	
-	public boolean addResults (Collection<URLResult> urlResults) {
-		boolean success = false;
-		for (URLResult urlResult : urlResults)
-			if (addResult(urlResult)) success = true;
-		return success;
-	}	
-	
-	public boolean addPosition (int position) {
-		return positions.add(position);
+	// Setters
+	public boolean add (int position) {
+		return this.positions.add(position);
 	}
 
-	public boolean addPositions (Set<Integer> positions) {
-		return this.positions.addAll(positions);
+	public boolean add (Set<Integer> positions) {
+		if (positions == null) return false;
+		return this.positions.addAll(positions);	
+	}
+	
+	public boolean add (SourceFragment fragment) {
+		if (fragment == null) return false;
+		if (matches == null) matches = new HashSet<>();
+		return this.matches.add(fragment);
 	}
 	
 	// Getters
-	public String toString () {
-		return label;
+	public Set<Integer> positions () {
+		return positions;
 	}
 	
-	public double getScore () {
-		return score;
-	}
-	
-	public double getPercent () {
-		return percent;
-	}
-	
-	public URLResult getBestResult () {
-		return bestResult;
-	}
-	
-	public Set<URLResult> getResults () {
-		return urlResults;
-	}
-	
-	public Set<Integer> getPositions () {
+	public Set<Integer> positionsInOrder () {
 		return new TreeSet<>(positions);
+	}
+	
+	public Set<SourceFragment> matches () {
+		return matches;
+	}
+	
+	public SourceFragment getBestMatch () {
+		return Collections.max(matches);
 	}
 	
 	public int size () {
 		return positions.size();
 	}
+	
+	public String toString () {
+		return label;
+	}
+	
+	public SourceText getSourceText () {
+		return sourceText;
+	}
+	
+	// Get a text representation of this source fragment
+	//
+	public String getAsText () {
+		return sourceText.getOverlapAsText(this);
+	}
+	
+	@Override
+	public Set<String> getNGrams () {
+		Set<String> ngrams = new HashSet<>();	
+		for (Integer position : positions)
+			ngrams.add(sourceText.get(position));		
+		return ngrams;
+	}	
+	
+	// Compare the passed fragment with this source text and return a fragment
+	// representing the overlap
+	//
+	@Override
+	public SourceFragment getOverlap (TokenizedText tokenizedText) {
+		Set<String> ngrams = tokenizedText.getNGrams();
+		SourceFragment overlap = new SourceFragment(sourceText);
+		for (String ngram : ngrams)
+			overlap.add(sourceText.locate(ngram));
+		return overlap;
+	}
 
-	// Comparators
+	// Compare to find the larger fragment.
+	//
+	@Override
+	public int compareTo (SourceFragment other) {
+		if (other == null) return 1;
+		return this.size() - other.size();
+	}
+	
+	// Comparators - based on label only
 	@Override
 	public int hashCode () {
 		return this.toString().hashCode();

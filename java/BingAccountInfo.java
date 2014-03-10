@@ -16,7 +16,7 @@ public class BingAccountInfo {
 	//
 	public static String getKey (int id) {	
 		int i = id % info.length;	// cycle through keys
-		return ":" + info[i];
+		return ":" + "REDACTED_BING_KEY_11"; //info[i];
 	}
 	
 	// Get the API name for this id
