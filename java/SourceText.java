@@ -104,23 +104,27 @@ public class SourceText implements TokenizedText {
 		generateNGrams(text);
 	}
 
-	// Calculate the percent match between this source text and one or
+	// Calculate the similarity between this source text and one or
 	// more fragments of that sourceText
 	//
-	public double getPercentMatch (SourceFragment fragment) {
-		return getPercentMatch(fragment.positions());
-	}
 	
-	public double getPercentMatch (Set<? extends SourceFragment> fragments) {
+	// As a percentage
+	//
+	public double getSimilarity (SourceFragment fragment) {
+		return getSimilarity(fragment.positions());
+	}
+	public double getSimilarity (Set<? extends SourceFragment> fragments) {
 		Set<Integer> positions = new HashSet<>();
 		for (SourceFragment fragment : fragments)
 			positions.addAll(fragment.positions());
-		return getPercentMatch(positions);
+		return getSimilarity(positions);
 	}
+	public double getSimilarity (Collection<Integer> positions) {
+		if (this.length() == 0) return 0.0;
 	
-	public double getPercentMatch (Collection<Integer> positions) {
-		BigDecimal percent = new BigDecimal(100.0 * positions.size() / this.length());
-		percent = percent.setScale(1, RoundingMode.HALF_UP);
+		BigDecimal size = new BigDecimal(positions.size());
+		BigDecimal length = new BigDecimal(this.length());
+		BigDecimal percent = size.divide(length, 3, BigDecimal.ROUND_HALF_UP);
 		
 		return percent.doubleValue();
 	}
@@ -128,6 +132,13 @@ public class SourceText implements TokenizedText {
 	// Compare the passed fragment with this source text and return a fragment
 	// representing the overlap
 	//
+	public SourceFragment getOverlap (String ... ngrams) {
+		SourceFragment overlap = new SourceFragment(this);
+		for (String ngram : ngrams)
+			overlap.add(locate(ngram));	
+		return overlap;
+	}
+	
 	public SourceFragment getOverlap (String text) {
 		Set<String> ngrams = generateNGrams(text, this);
 		SourceFragment overlap = new SourceFragment(this);
@@ -202,6 +213,12 @@ public class SourceText implements TokenizedText {
 		return nGrams.size();
 	}
 	
+	public Set<SourceFragment> getVisible (Set<? extends SourceFragment> fragments) {
+		Set<SourceFragment> visible = new HashSet<>(getOverlapByChar(fragments));
+		visible.remove(null);
+		return visible;
+	}	
+	
 	//===========================================================//
 	// Match each fragment to a particular character in the source
 	// document. This is the best way to ensure no fragment
@@ -266,26 +283,44 @@ public class SourceText implements TokenizedText {
 	public String getOverlapInContext (Set<? extends SourceFragment> fragments) {
 		List<SourceFragment> sourceTextByChar = getOverlapByChar(fragments);
 		int last = sourceTextByChar.size() - 1;
-		String sourceText = null;
-		
+
 		int contextStart = last;
 		int contextEnd = 0;
-		for (SourceFragment fragment : fragments) {
-			if (sourceText == null)
-				sourceText = fragment.getSourceText().toString();
-				
+		for (SourceFragment fragment : fragments) {			
 			int start = sourceTextByChar.indexOf(fragment);
 			int end = sourceTextByChar.lastIndexOf(fragment);
-			
-			if (start < contextStart) contextStart = start;
-			if (end > contextEnd) contextEnd = end;		
+		
+			if (start == -1)
+				continue;
+			if (start < contextStart) 
+				contextStart = start;
+			if (end > contextEnd) 
+				contextEnd = end;		
 		}
-		BreakIterator it = BreakIterator.getSentenceInstance();
-		it.setText(sourceText);	
+		BreakIterator sentence = BreakIterator.getSentenceInstance();
+		sentence.setText(sourceText);		
 		
-		contextStart = it.preceding(contextStart);
-		contextEnd = it.following(contextEnd+4);
+		String paragraph = System.lineSeparator()+System.lineSeparator();		
+		int offset = 150;
+		int lineBreak = 0;
+		int sentenceBreak = 0;
 		
+		if (contextStart != sentence.first()) {	
+			sentenceBreak = sentence.preceding(contextStart);
+			if (!sentence.isBoundary(contextStart) && sentenceBreak != sentence.first())
+				sentenceBreak = sentence.preceding(sentenceBreak);
+		}
+		lineBreak = sourceText.lastIndexOf(paragraph, contextStart);
+		contextStart = (lineBreak - offset) > sentenceBreak ? lineBreak : sentenceBreak;
+	
+		if (contextEnd != sentence.last()) {
+			sentenceBreak = sentence.following(contextEnd);
+			if (!sentence.isBoundary(contextEnd) && sentenceBreak != sentence.last())
+				sentenceBreak = sentence.following(sentenceBreak);
+		}
+		lineBreak = sourceText.indexOf(paragraph, contextEnd);
+		contextEnd = lineBreak != -1 && (lineBreak + offset) < sentenceBreak ? lineBreak : sentenceBreak;
+
 		return sourceText.substring(contextStart, contextEnd);
 	}
 

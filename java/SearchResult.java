@@ -85,6 +85,9 @@ public class SearchResult {
 	}
 	
 	private double getIDF () {
+		if (totalResults == 0)
+			return 1.0;
+			
 		double fraction = engine.indexSize() / (double)totalResults;
 		return logOfBase(engine.indexSize(), fraction);
 	}

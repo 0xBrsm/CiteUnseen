@@ -39,7 +39,7 @@ public class SubmissionHandler extends HttpServlet {
 		Dev.out.println();
 	
 		// Start timer, debug
-		Timer timer = new Timer("SubmissionHandler");
+		Timer timer = Timer.startNew("SubmissionHandler");
 	
 		//process only multipart content
 		if (ServletFileUpload.isMultipartContent(request)) {
@@ -76,77 +76,83 @@ public class SubmissionHandler extends HttpServlet {
 
 		// End our timer and output time to run, debug
 		//
-		timer.stop();
+		timer.stop().print("s");
 	
     }
 
 	@SuppressWarnings("unchecked")	
 	public Map<String, String> processSubmission (FileItem fileItem, Map<String, String> options) throws Exception {
 		// -- Static defaults - these cannot be changed by the user
-		String cacheDir = "."+File.separator+"Documents"+File.separator;
-		Cache useCache = Cache.USE;			// default, use cache if present - if not, search and save cache		
-		boolean saveLocalCopy = true;		// default, save a local copy of the document			
-
-		// File/data locator paths
-		String baseDir = "."+File.separator+"Documents"+File.separator;
-		String fileName = FilenameUtils.getName(fileItem.getName()); 		// Extra nonsense courtesy of IE
-		String fileRoot = fileName.substring(0, fileName.lastIndexOf("."));
-		String fileRootPath = baseDir+fileRoot+File.separator+fileRoot;
-		String filePath = baseDir+fileRoot+File.separator+fileName;
-
-		// Save a local copy
-		if (saveLocalCopy) {
-			File document = new File(filePath);
-			if (!document.exists()) {
-				document.getParentFile().mkdirs();
-				fileItem.write(document);
-				Dev.out.println("Local copy of document saved to "+document.getParentFile());
-			}
-		}
-
+		Cache useCache = Cache.USE;			// default, use cache if present - if not, search and save cache			
+		String corporaPath = "corpora"+File.separator;
+		
 		// Initialize base objects	
 		Processor processor = new Processor();
-		SearchEngine engine = new GoogleSearch();
+		SearchEngine engine = null;
 		
 		// Get our user options and update our default values, if necessary
 		//
 		int n = 0;							// number of tokens	specified by user
 		boolean ignoreCitations = false;	// ignore citations in matching
+		boolean snippetSearch = true;		// search snippets
 		
 		for (Map.Entry<String, String> entry : options.entrySet()) {
 			String fieldName = entry.getKey();
 			String fieldValue = entry.getValue();
 			
-			switch (fieldName) {
-				case "urlThreshold" :
-					processor.setURLThreshold(Integer.parseInt(fieldValue));
-					break;			
+			switch (fieldName) {	
 				case "minScore" :
 					processor.setMinimumScore(Integer.parseInt(fieldValue));
 					break;
-				case "n" :
-					n = Integer.parseInt(fieldValue);
-					break;
+				case "weightFactor" :
+					processor.setWeightFactor(Double.parseDouble(fieldValue));
+					break;					
 				case "scoreByRarity" :
 					processor.setScoreByRarity(Boolean.parseBoolean(fieldValue));
 					break;
+				case "scoreGapsByRarity" :
+					processor.setScoreGapsByRarity(Boolean.parseBoolean(fieldValue));
+					break;					
 				case "scoringMethod" :
 					processor.setScoringMethod(fieldValue);
-					break;					
-				case "snippetSearch" :
-					engine.setSnippetSearch(Boolean.parseBoolean(fieldValue));
 					break;
+				case "disableScoring" :
+					if (Boolean.parseBoolean(fieldValue))
+						processor.disable();
+					break;						
 				case "ignoreCitations" :
 					ignoreCitations = Boolean.parseBoolean(fieldValue);
 					break;					
+				case "snippetSearch" :
+					snippetSearch = Boolean.parseBoolean(fieldValue);
+					break;
+				case "n" :
+					n = Integer.parseInt(fieldValue);
+					break;					
+				case "searchEngine" :
+					switch (fieldValue) {
+						case "bing"			:	engine = new BingSearch();break;
+						case "bingweb"		:	engine = new BingWebSearch();break;
+						case "faroo"		:	engine = new FarooSearch();break;
+						case "google"		:	engine = new GoogleSearch();break;
+						case "yahoo"		:	engine = new YahooSearch();break;
+						case "COPSA"		:	engine = new OfflineSearch(corporaPath+fieldValue+File.separator);break;
+						case "Webis-CPC-11"	:	engine = new OfflineSearch(corporaPath+fieldValue+File.separator, n);break;
+					}
 			}
 		}
+		// Extra nonsense courtesy of IE
+		String fileName = FilenameUtils.getName(fileItem.getName());
+		
+		// Save a local copy of this file and set up the cache folder
+		Dev.copyToCache(fileItem);		
+		
+		// Configure search engine options
+		engine.setCache(useCache, Dev.datPath(fileName, n, engine));			
+		engine.setSnippetSearch(snippetSearch);		
 		
 		// Create our source text
-		SourceText sourceText = new SourceText(fileItem.getInputStream(), n, ignoreCitations);
-		
-		// Set our hard coded, non-standard defaults
-		engine.setCache(useCache, fileRootPath+"."+n+"."+engine+".dat");			
+		SourceText sourceText = new SourceText(fileItem.getInputStream(), n, ignoreCitations);		
 
 		// Setup complete...
 		Dev.out.println("Processing "+fileName+"...");
@@ -155,10 +161,10 @@ public class SubmissionHandler extends HttpServlet {
 		Map<String, SearchResult> searchResults = engine.search(sourceText);
 		
 		// Use our search results to find all word sequences of any interest
-		Set<Sequence> sequences = processor.process(searchResults, sourceText);
-		
+		Set<SourceFragment> sequences = processor.process(searchResults, sourceText);
+
 		// Mark our sequences by their matching URLs in HTML format
-		Map<String, String> results = Builder.getHTMLResults(sequences, sourceText);			
+		Map<String, String> results = PageBuilder.getHTMLResults(sequences, sourceText);			
 	
 		Dev.out.println("Results output to client.");
 		

@@ -9,41 +9,102 @@ package citeunseen;
 import java.util.concurrent.TimeUnit;
  
 public class Timer {
-	private String name;
- 	private long startTime;
-	private long endTime;
-	private long totalTime;
-
-	// Constructors
-	public Timer () {}
+	private static int id;
+	private String name = "Timer"+id;
 	
+ 	private long startTime;
+	private long runTime;
+	private boolean running;
+	private boolean restart;
+
+	// Static constructors
+	//
+	public static Timer startNew () {
+		Timer timer = new Timer();
+		timer.start();
+		return timer;
+	}
+	public static Timer startNew (String name) {
+		Timer timer = new Timer(name);
+		timer.start();
+		return timer;
+	}	
+	
+	// Constructors
+	//
 	public Timer (String name) {
 		this.name = name;
-		start();
 	}
+	public Timer () {}
 	
- 	// Non-static methods for running a timer
+	// Output methods
 	//
-	public void start () {
-		startTime = System.nanoTime();
-		if (name != null) Dev.out.println(name+" started...");		
-	}
-	
-	public double stop () {
-		endTime = System.nanoTime();		
-		long runTime = endTime - startTime;
-		totalTime += runTime;
-	
-		if (name != null) Dev.out.println(name+" run time: "+ms(runTime)+"s ");
+	public Timer print () {
+		if (running && runTime == 0)
+			Dev.out.println(name+" started.");
+		else print("");
 		
-		return runTime;
+		return this;
 	}
 	
-	public double totalTime () {
-		return ms(totalTime);
+	public Timer print (String type) {
+		String time = "";
+		switch(type) {
+			case "s"	:	time = s()+type; break;		
+			case "ms"	:	time = ms()+type; break;
+			default		:	time = ns()+type;
+		}
+		Dev.out.println(name+" run time: "+time);
+		
+		return this;
 	}
 	
-	private double ms (long time) {
-		return TimeUnit.MILLISECONDS.convert(time, TimeUnit.NANOSECONDS)/1000.0;
+ 	// Methods for retrieving runtime
+	//
+	public double s () {
+		return ms() / 1000.0;
+	}
+	
+	public long ms () {
+		return TimeUnit.NANOSECONDS.toMillis(ns());
+	}	
+	
+	public long ns () {
+		if (!running) return runTime;
+		return System.nanoTime() - startTime;
+	}
+	
+	// Methods for running a timer
+	//	
+	public Timer start () {
+		if (restart) runTime = 0;
+		restart = true;
+		running = true;
+
+		startTime = System.nanoTime();
+		
+		return this;
+	}
+	
+	public Timer stop () {	
+		if (running)
+			runTime += System.nanoTime() - startTime;
+		running = false;
+		
+		return this;
+	}
+			
+	public Timer pause () {
+		stop();	
+		restart = false;
+		
+		return this;
+	}
+	
+	public Timer lap () {
+		pause();
+		start();
+	
+		return this;
 	}
 }

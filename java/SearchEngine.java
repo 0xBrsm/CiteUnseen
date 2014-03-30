@@ -51,13 +51,13 @@ import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 			int retries = 0;
 			int percentComplete = 0;
 			while (true) {
-				try {
-//					response = httpClient.execute(httpGet, responseHandler);				
+				try {			
 					HttpResponse httpResponse = httpClient.execute(httpGet);
-					if (httpResponse.getStatusLine().getStatusCode() != 200) {
+					int statusCode = httpResponse.getStatusLine().getStatusCode();
+					if (statusCode != 200) {
 						String responseBody = EntityUtils.toString(httpResponse.getEntity());
-						String errorMsg = SearchEngine.this.parseError(responseBody);
-						throw new Exception(errorMsg);
+						String errorMsg = SearchEngine.this.getSerpParser().parseError(responseBody);
+						throw new Exception(statusCode+" - "+errorMsg);
 					}				
 					response = responseHandler.handleResponse(httpResponse);
 
@@ -68,10 +68,11 @@ import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 					if (retries < maxRetries) {
 						retries++;
 						percentComplete = 100 * threadsClosed.get() / totalThreads;
-						System.out.print("Percent complete: "+percentComplete+"% (Retries: "+threadsRetried.incrementAndGet()+" Errors: "+threadsErrored+")\r");
-					} else {
+						Dev.out.print("Percent complete: "+percentComplete+"% (Retries: "+threadsRetried.incrementAndGet()+" Errors: "+threadsErrored+")\r");
+					} else {				
 						percentComplete = 100 * threadsClosed.incrementAndGet() / totalThreads;
-						Dev.out.println("Thread "+id+" error: "+e.getMessage());
+						Dev.out.print("\r                                                                 ");
+						Dev.out.println("\rThread "+id+" error: "+e.getMessage());
 						Dev.out.print("Percent complete: "+percentComplete+"% (Retries: "+threadsRetried+" Errors: "+threadsErrored.incrementAndGet()+")\r");
 						break;
 					}
@@ -86,13 +87,6 @@ import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 	//
 	abstract SerpParser getSerpParser ();	
 	abstract Map<String, String> buildQuery (String query, int id);
-	
-	String parseError (String response) {
-	
-		String error = response;
-	
-		return error;
-	}
 
 	// The common name and HTML attribution label for this search engine
 	private final String NAME;
@@ -279,7 +273,10 @@ import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 		return httpGet;
 	}
 	
-	private Map<String, SearchResult> parseResults (Map<String, String> serps, SourceText sourceText) {
+	public Map<String, SearchResult> parseResults (Map<String, String> serps, SourceText sourceText) {
+		return parseResults(serps, sourceText.getNGrams(), sourceText, 0);
+	}
+	private Map<String, SearchResult> parseResults (Map<String, String> serps, Set<String> ngrams, SourceText sourceText, int level) {
 		int total = serps.size();
 		Dev.out.println("Parsing "+total+" SERPs...");	
 	
@@ -289,9 +286,8 @@ import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 		SerpParser parser = this.getSerpParser();
 		Map<String, SearchResult> searchResults = new HashMap<>();
 		
-		for (Map.Entry<String, String> entry : serps.entrySet()) {
-			String ngram = entry.getKey();
-			String serp = entry.getValue();
+		for (String ngram : ngrams) {
+			String serp = serps.get(ngram);
 			
 			// track broken searches for re-searching
 			if (serp == null || serp.equals("")) {
@@ -332,16 +328,17 @@ import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 		// Check for errors and repair as necessary
 		//
 		Dev.out.println("Found "+(total - errors.size())+" SERPs with data ("+errors.size()+" errors)...");
-		if (errors.size() > 0 && console) {
+		if (errors.size() > 0 && level < maxRetries && cacheOption != Cache.IMPORT) {
+			level++;
 			String msg = "Searching "+this.toString()+" for "+errors.size()+" ngrams to repair errors...";
 			if (Dev.confirm(console, msg)) {
 				Map<String, String> newSerps = goSearch(errors);
-				Map<String, SearchResult> newResults = parseResults(newSerps, sourceText);
+				Map<String, SearchResult> newResults = parseResults(newSerps, errors, sourceText, level);
 				if (newResults.size() > 0) {
 					serps.putAll(newSerps);
 					searchResults.putAll(newResults);
 				
-					if (cacheOption != null && Dev.confirm(console, "Updating cache file with new results..."))
+					if (level == 1 && cacheOption != null && Dev.confirm(console, "Updating cache file with new results..."))
 						Dev.exportCache(serps, cachePath);
 				}
 			}

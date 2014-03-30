@@ -18,6 +18,14 @@ public class SourceFragment implements TokenizedText, Comparable<SourceFragment>
 	private final SourceText sourceText;
 	private Set<SourceFragment> matches;
 	private Set<Integer> positions = new HashSet<>();
+	
+	// Static methods
+	public static Set<SourceFragment> switchToMatches (Set<? extends SourceFragment> fragments) {
+		Set<SourceFragment> matches = new HashSet<>();
+		for (SourceFragment fragment : fragments)
+			matches.addAll(fragment.matches());
+		return matches;
+	}	
 
 	// Constructors
 	public SourceFragment (SourceText sourceText) {
@@ -45,6 +53,12 @@ public class SourceFragment implements TokenizedText, Comparable<SourceFragment>
 		return this.matches.add(fragment);
 	}
 	
+	public boolean addAll (Set<? extends SourceFragment> fragments) {
+		if (fragments == null) return false;	
+		if (matches == null) matches = new HashSet<>();
+		return this.matches.addAll(fragments);		
+	}
+	
 	// Getters
 	public Set<Integer> positions () {
 		return positions;
@@ -55,7 +69,7 @@ public class SourceFragment implements TokenizedText, Comparable<SourceFragment>
 	}
 	
 	public Set<SourceFragment> matches () {
-		return matches;
+		return matches == null ? matches = new HashSet<>() : matches;
 	}
 	
 	public SourceFragment getBestMatch () {
@@ -72,6 +86,12 @@ public class SourceFragment implements TokenizedText, Comparable<SourceFragment>
 	
 	public SourceText getSourceText () {
 		return sourceText;
+	}
+	
+	// Get the similarity of this fragment with its source
+	//
+	public double similarity () {
+		return sourceText.getSimilarity(this);
 	}
 	
 	// Get a text representation of this source fragment

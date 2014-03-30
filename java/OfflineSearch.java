@@ -12,37 +12,50 @@ import java.util.*;
 
 public class OfflineSearch extends SearchEngine {
 	// The common name for this search engine
-	private static final String NAME = "Offline";
+	private final String NAME;
 	
 	// The HTML attribution label for this engine
 	private static final String LABEL = "";	
 
 	// The total size of the searchable index.
-	// For consistency, this is found by searching for "a"
-	// and using the number of returned results.
 	//
-	private static final long INDEX_SIZE = 5;
+	private final long INDEX_SIZE;
 	
 	// Offline index for searching
 	//
 	private final Map<String, HashSet<File>> index;
 	
-	// Constructor
+	// Static helper methods
 	//
-	public OfflineSearch () throws Exception {
-		this("COPSA"+File.separator+"index.dat");
+	private static String getName (String path) {
+		String[] tokens = path.split("\\"+File.separator);
+		return tokens[tokens.length-1];
+	}
+	private static long getIndexSize (String path) {
+		return (new File(path, "Sources")).listFiles().length;
+	}	
+	
+	// Constructors
+	//
+	public OfflineSearch (String corpus) throws Exception {
+		this(corpus, 0);
+	}	
+	public OfflineSearch (String corpus, int n) throws Exception {
+		super(getName(corpus), LABEL, getIndexSize(corpus));
+		NAME = getName(corpus);
+		INDEX_SIZE = getIndexSize(corpus);
+		
+		String indexPath = n > 0 ? corpus+"index."+n+".dat" : corpus+"index.dat";
+		index = loadIndex(indexPath);
 	}
 	
-	public OfflineSearch (String path) throws Exception {
-		super(NAME, LABEL, INDEX_SIZE);
-		index = loadIndex(path);
-	}
-
+	// Indexing and searching
+	//
 	@SuppressWarnings("unchecked")
-	private Map<String, HashSet<File>> loadIndex (String path) throws Exception {
-		Map<String, HashSet<File>> index = (Map<String, HashSet<File>>)Dev.importCache(path);
+	private Map<String, HashSet<File>> loadIndex (String indexPath) throws Exception {
+		Map<String, HashSet<File>> index = (Map<String, HashSet<File>>)Dev.importCache(indexPath);
 		if (index == null)
-			throw new Exception("Could not load index file from: "+path);
+			throw new Exception("Could not load index file from: "+indexPath);
 		return index;
 	}
 	

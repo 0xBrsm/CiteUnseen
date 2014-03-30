@@ -5,7 +5,7 @@
  *	ALM in IT Thesis
  *	<date>	  
  *
- *	Builder utility class to build HTML pages
+ *	PageBuilder utility class to build HTML pages
  *	for presentation of results
  *
  */
@@ -14,10 +14,11 @@ package citeunseen;
 import java.io.*;
 import java.util.*;
 import java.net.URL;
-import org.apache.tika.*;
-import org.apache.lucene.analysis.tokenattributes.*;
+import java.text.BreakIterator;
 
-public class Builder {
+import org.apache.commons.lang3.StringEscapeUtils;
+
+public class PageBuilder {
 	//===========================================================//	
 	// Format a page on the fly and save it
 	//
@@ -45,19 +46,18 @@ public class Builder {
 	}
 	public static Map<String, String> getHTMLResults (Set<? extends SourceFragment> fragments, SourceText sourceText) {
 		// Get the overall stats on the matches
-		Set<SourceFragment> urls = new HashSet<>();		
-		for (SourceFragment fragment : fragments)
-			urls.addAll(fragment.matches());
-		double percent = sourceText.getPercentMatch(fragments);
+		Set<SourceFragment> hits = SourceFragment.switchToMatches(fragments);
+		double percent = (int)(sourceText.getSimilarity(fragments) * 1000) / 10.0;
 		
-		String summary = percent+"% similarity, with "+urls.size()+" notable URLs (duplicates hidden).";
-
+		String summary = percent+"% similarity, with "+hits.size()+" notable URLs (duplicates and overlaps hidden).";
+		
 		// Build a mapping of url to HTML tag
 		Map<SourceFragment, String> startTags = tagAsSpans(fragments);
 		Map<SourceFragment, String> endTags = tagWithMarker(fragments, "</a></span>");		
 
 		// Mark all our matches, highlighted as URLs
-		String markedText = markByChar(fragments, sourceText, startTags, endTags);
+//		String markedText = markByChar(fragments, sourceText, startTags, endTags);
+		String markedText = markByWord(fragments, sourceText, startTags, endTags);
 
 		// Results only have two values, don't waste space
 		Map<String, String> results = new HashMap<>(2, 1.5f);
@@ -68,6 +68,10 @@ public class Builder {
 		return results;
 	}
 
+	//===========================================================//
+	// Create HTML tags and colors for pass fragments
+	//===========================================================//		
+	
 	// Randomly generates HTML color codes for darker colors.
 	//
 	private static String randomColor(){
@@ -93,22 +97,24 @@ public class Builder {
 
 		int id = 0;		
 		for (SourceFragment fragment : fragments) {
-			int total = fragment.size();
+			int n = fragment.getSourceText().getN();
+			double percent = (int)(1000 * fragment.similarity()) / 10.0;
 			int score = 0;
-			String url = fragment.toString();
-			String alt = url;
 
 			String urls = "";
 			for (SourceFragment match : fragment.matches())
-				urls += match+"\n";
-		
+				urls += match+"\n";		
+
+			String url = fragment.toString();
+			String alt = " with "+percent+"% similarity.\n"+urls+"\n";
+				
 			// hack
 			if (fragment instanceof Sequence) {
 				Sequence sequence = (Sequence)fragment;
 				score = (int)sequence.score();
 				url = sequence.getBestMatch().toString();
-				alt = "Score of "+score+" with "+total+" matches\n"+urls;
-			}
+				alt = "Score of "+score+alt;
+			} else alt = url+"\nBest match"+alt;
 			
 			String color = colorMap.get(url);								// get this URL's color, if it has one
 			if (color == null) {
@@ -117,11 +123,14 @@ public class Builder {
 					&& colorMap.size() < 64);								// currently only supports 64 colors
 				colorMap.put(url, color);									// and save it for later
 			}
-				
+			
+			String ngramString = fragment.getNGrams().toString();
 			String tag = 
 				"<span class='sequence'"									// specify this as a sequence
 				+" url='"+url+"'"											// associate it with a specific url
 				+" name='seq-"+id+"'"										// give the sequence a unique identify
+				+" n='"+n+"'"												// value of n for this sequence
+				+" ngrams=\""+ngramString+"\""								// add our ngrams for later matching
 				+" style='background-color:"+color+"'>"						// assign unique color to this tag
 				+"<a href="+url												// build an HTML link
 				+" style='font-weight: bold; text-decoration: none'"		// configure style
@@ -133,9 +142,11 @@ public class Builder {
 		}
 		return tags;
 	}
+	//===========================================================//
 	
+	//===========================================================//
 	// Mark the best fragment for each character in the source text
-	//
+	//===========================================================//	
 	public static String markByChar (SourceFragment fragment, String tag) {
 		Map<SourceFragment, String> tags = tagWithMarker(Collections.singleton(fragment), tag);
 		return markByChar(fragment, tags, tags);
@@ -173,98 +184,60 @@ public class Builder {
 	//===========================================================//
 	
 	//===========================================================//
-	// Create summary pages for each displayed fragment
+	// Mark by word to avoid crappy overlaps
 	//===========================================================//
-
-	public static void buildSummaryPageTika (SourceFragment fragment, URLResult urlResult) {
-		try {
-			SourceText sourceText = new SourceText(urlResult, 3);
-			Dev.output("<pre>"+sourceText+"</pre>", "test.html");
-		}
-		catch (Exception e) { Dev.out.println(e.getMessage()); }		
+	public static String markByWord (SourceFragment fragment, String tag) {
+		Map<SourceFragment, String> tags = tagWithMarker(Collections.singleton(fragment), tag);
+		return markByWord(fragment, tags, tags);
 	}
-/*	
-	public static void buildSummaryPage (SourceFragment fragment, URLResult urlResult) {
-		try {
-			String url = urlResult.toString();		
-			String pageText = Jsoup.connect(url).get().html();		
-			Dev.output(pageText, "test.html");	
-		}
-		catch (Exception e) { Dev.out.println(e.getMessage()); }
-	}
-/*
-	private static String markOffsets (Map<OffsetAttribute, SourceFragment> offsets, SourceText sourceText) {
-		String text = sourceText.toString();
-		StringBuilder builder = new StringBuilder();
-		Set<SourceFragment> fragments = new HashSet<>(offsets.values());
-		Map<SourceFragment, String> hrefs = buildHREFs(fragments);
+	public static String markByWord (SourceFragment fragment, String startTag, String endTag) {
+		Map<SourceFragment, String> startTags = tagWithMarker(Collections.singleton(fragment), startTag);
+		Map<SourceFragment, String> endTags = tagWithMarker(Collections.singleton(fragment), endTag);		
+		return markByWord(fragment, startTags, endTags);
+	}	
+	public static String markByWord (SourceFragment fragment, Map<SourceFragment, String> startTags, Map<SourceFragment, String> endTags) {
+		return markByWord(Collections.singleton(fragment), fragment.getSourceText(), startTags, endTags);
+	}	
+	public static String markByWord (Set<? extends SourceFragment> fragments, SourceText sourceText, Map<SourceFragment, String> startTags, Map<SourceFragment, String> endTags) {
+		List<SourceFragment> sourceTextChar = sourceText.getOverlapByChar(fragments);		
+		BreakIterator wordbreak = BreakIterator.getWordInstance();
+		String text = sourceText.toString();		
+		wordbreak.setText(text);
 		
-		int last = 0;
-		for (Map.Entry<OffsetAttribute, SourceFragment> entry : offsets.entrySet()) {
-			OffsetAttribute offset = entry.getKey();
-			SourceFragment fragment = entry.getValue();
-			
-			int start = offset.startOffset();
-			int end = offset.endOffset();
-			
-			builder.append(text.substring(last, start));		
-			builder.append(hrefs.get(fragment));
-			builder.append(text.substring(start, end));
-			builder.append("</a></span>");
-			
-			last = end;
-		}
-		builder.append(text.substring(last));
+		SourceFragment previous = null;
+		int last = 0;			
+		int start = 0;
+		int end = 0;
 
-		return builder.toString();
-	}
-/*
-	// Mark the best fragment for each word in the source text
-	//
-	private static String markSequences (Map<Integer, SourceFragment> seqByPosition, SourceText sourceText) {
-		String text = sourceText.toString();
-		StringBuilder builder = new StringBuilder();
-		Set<SourceFragment> fragments = new HashSet<>(seqByPosition.values());
-		Map<SourceFragment, String> hrefs = buildHREFs(fragments);	
-	
-		// This may or may not be faster than just iterating, need to test
-		seqByPosition = new TreeMap<>(seqByPosition);
-
-		int last = 0;
-		int next = 0;
-		SourceFragment lastSequence = null;
-		for (Map.Entry<Integer, SourceFragment> entry : seqByPosition.entrySet()) {
-			int position = entry.getKey();
-			SourceFragment fragment = entry.getValue();
-			
-			// Start and end of first word in ngram
-			int start = sourceText.startOffset(position);
-			int end = 0;
-			
-			if (position < sourceText.length() - 1)
-					end = sourceText.startOffset(position+1);
-			else	end = sourceText.endOffset(position);
-
-			if (start > last) {								// this word starts
-				builder.append(text.substring(next, last));
-				builder.append("</a></span>");
-				builder.append(text.substring(last, start));
-				builder.append(hrefs.get(fragment));
-			} else if (fragment != lastSequence) {			// new, better URL mid-fragment
-				builder.append(text.substring(next, start));
-				builder.append("</a></span>");
-				builder.append(hrefs.get(fragment));
+		StringBuilder builder = new StringBuilder();		
+		while (end != BreakIterator.DONE) {			
+			SourceFragment current = sourceTextChar.get(start);		
+			if (current != previous) {
+				if (previous != null)
+					builder.append(endTags.get(previous));
+				if (current != null) {
+					builder.append(text.substring(last, start));
+					builder.append(startTags.get(current));
+					last = start;
+				}
 			}
-			builder.append(text.substring(start, end));
-
-			lastSequence = fragment;
-			last = sourceText.endOffset(position);
-			next = end;
+			builder.append(text.substring(last, end));
+			
+			previous = current;
+			last = end;
+			start = wordbreak.next();
+			end = wordbreak.next();
+			
+			nextWordStart: while (end != BreakIterator.DONE) {
+				for (int i = start; i < end; i++) {
+					if (Character.isLetter(text.codePointAt(i)))
+						break nextWordStart;
+				}
+				start = end;
+				end = wordbreak.next();
+			}
 		}
-		builder.append(text.substring(next, last));
-		builder.append("</a></span>");
-		builder.append(text.substring(last));
-		
 		return builder.toString();
-	} */		
+	}
+	//===========================================================//	
 }

@@ -13,54 +13,136 @@ import java.math.*;
 import org.apache.lucene.analysis.tokenattributes.*;
 
 public class Processor {
-	private int lengthThreshold = 1;		// minimum number of occurrences for a URL to be considered worth checking
-	private int minScore = 1;				// minimum score for URL match sequences to be considered significant/displayed to user
+	private int minScore = 8;				// minimum score for URL match sequences to be considered significant/displayed to user
 	private boolean scoreByRarity = true;	// whether to weight the worth of matches by the number of results each returned in the search
+	private boolean weightGaps = false;		// flat score for gaps, rather than log probability...this helps performance A LOT	
 	private String scoringMethod = "idf";	// default scoring method
-	private boolean fillGaps = true;		// I don't even know what this does yet
+	private double weightFactor = 1.0;		// weighting factor
+	private boolean disabled = false;		// if advanced processing is enabled or disabled
 
-	// Remember the search results and url results once processing has begun
-	private Map<String, SearchResult> searchResults = new HashMap<>();
-	private Set<URLResult> urlResults = new HashSet<>();
+	// Remember the search results once processing has begun
+	// This is only for later scoring
+	private Map<String, SearchResult> searchResults;
 	
-	// Setters for config parameters once defaults are established
+	// Factory method?
 	//
-	public void setURLThreshold (int urlThreshold) {
-		this.lengthThreshold = urlThreshold;
+	public static Processor build () {
+		return new Processor();
+	}	
+
+	//
+	// Constructors
+	//
+	public Processor () { }
+	public Processor (Processor oldp) {
+		this.setMinimumScore(oldp.minimumScore());
+		this.setScoreByRarity(oldp.scoreByRarity());
+		this.setScoreGapsByRarity(oldp.scoreGapsByRarity());
+		this.setScoringMethod(oldp.scoringMethod());
+		this.setWeightFactor(oldp.scoringWeightFactor());
+		if (oldp.disabled()) this.disable();
+	}
+
+	//
+	// Copy method
+	//
+	public Processor copy () {
+		return new Processor(this);
 	}
 	
-	public void setMinimumScore (int minScore) {
+	//
+	// Setters/getters
+	//
+	
+	// Set/get the base score
+	//
+	public Processor setMinimumScore (int minScore) {
 		this.minScore = minScore;
+		return this;
 	}
-	
-	public void setScoreByRarity (boolean scoreByRarity) {
+	public int minimumScore () {
+		return minScore;
+	}
+
+	// Set score by rarity options, all or individually
+	//	
+	public Processor setScoreByRarity (boolean scoreByRarity) {
 		this.scoreByRarity = scoreByRarity;
+		return this;
+	}
+	public Processor setScoreByRarity (boolean scoreByRarity, boolean weightGaps) {
+		this.scoreByRarity = scoreByRarity;
+		this.weightGaps = weightGaps;
+		return this;
+	}
+	public Processor setScoreByRarity (boolean scoreByRarity, boolean weightGaps, double weightFactor) {
+		this.scoreByRarity = scoreByRarity;
+		this.weightGaps = weightGaps;
+		this.weightFactor = weightFactor;		
+		return this;
+	}
+	public boolean scoreByRarity () {
+		return scoreByRarity;
 	}
 	
-	public void setScoringMethod (String method) {
+	public Processor setScoreGapsByRarity (boolean weightGaps) {
+		this.weightGaps = weightGaps;
+		return this;
+	}
+	public boolean scoreGapsByRarity () {
+		return weightGaps;
+	}
+	
+	public Processor setScoringMethod (String method) {
 		this.scoringMethod = method;
+		return this;
+	}
+	public String scoringMethod () {
+		return scoringMethod;
 	}
 	
-	public Set<URLResult> urlResults () {
-		return urlResults;
+	public Processor setWeightFactor (double weightFactor) {
+		this.weightFactor = weightFactor;
+		return this;
+	}
+	public double scoringWeightFactor () {
+		return weightFactor;
+	}
+
+	// Settings for enabling/disabling advanced processing
+	//
+	public Processor enable () {
+		disabled = false;
+		return this;
+	}
+	public Processor disable () {
+		disabled = true;
+		return this;
+	}
+	public boolean disabled () {
+		return disabled;
 	}
 
 	//===========================================================//	
 	// Take our source text and search results as input.
 	// Return the a map between document positions and sequences.
 	//===========================================================//
-	public Set<Sequence> process (Map<String, SearchResult> searchResults, SourceText sourceText) {
-		this.searchResults = searchResults;
-
-		Set<URLResult> urlResults = getByURL(searchResults, sourceText);	
-		Set<Sequence> sequences = findSequences(urlResults);
+	public Set<SourceFragment> process (Map<String, SearchResult> searchResults, SourceText sourceText) {
+		// Remember results for scoreNGram access
+		if (scoreByRarity && !disabled)
+			this.searchResults = searchResults;
 		
-//		Map<OffsetAttribute, Sequence> offsets = adjustOffsets(convertToOffsets(sequences));
-//		Map<Integer, Sequence> seqByPosition = getByPosition(sequences);
-
-		this.urlResults = urlResults;
-	
-		return sequences;
+		Set<SourceFragment> fragments = new HashSet<>();	
+		Set<URLResult> urlResults = getByURL(searchResults, sourceText);
+		if (disabled) {
+			fragments.addAll(urlResults);
+			return fragments;
+		}
+		Set<Sequence> sequences = findSequences(urlResults);
+		this.searchResults = null; // release memory
+		fragments.addAll(sequences);
+		
+		return fragments;
 	}
 	//===========================================================//	
 	
@@ -123,10 +205,7 @@ public class Processor {
 	private List<Sequence> buildNumericSequence (SourceFragment fragment) {
 		SourceText sourceText = fragment.getSourceText();
 		Set<Integer> positions = fragment.positionsInOrder();
-		List<Sequence> seq = new LinkedList<>();
-		
-		// skip fragments that have too few positions
-		if (positions.size() < lengthThreshold) return seq;
+		List<Sequence> seq = new ArrayList<>();
 		
 		// Build word sequence array
 		// Positives are number of matches in a row, negatives are number of mismatches in a row
@@ -137,29 +216,31 @@ public class Processor {
 		int last = 0;
 		for (Integer i : positions) {
 			String ngram = sourceText.get(i);
-			double v = scoreNGram(ngram);
+			double v = scoreNGram(ngram) * weightFactor;
 			
-			int d = i - last;						// distance between this position and the last position
+			int gap = i - last - 1;					// gap size between this position and the last position
 			p = seq.size() - 1;						// set to previous position		
 			if (seq.size() == 0) {					// if we're just starting, 
 				sub.add(v, i);						//  add our value for our first match
 				seq.add(sub);
-			} else if (d < n)	{					// if the distance is less than n, this is an overlapping match
+			} else if (gap == 0) {					// if no gap, this is a consecutive match
 				sub = seq.get(p);					//  first, get the last value
 				sub.add(v, i);						//	add this value to the sequence
-				d--;								//	decrement d to start at the previous location
-				if (fillGaps) while (d > 0) {		// now, fill in the gaps for all the ngrams between last and this one
-					ngram = sourceText.get(last+d);	// I'm not really sure what effect this has, though
-					v = scoreNGram(ngram);			
-					sub.add(v, last+d);
-					d--;
-				}
-			} else {								// not overlapping
+			} else {								// not consecutive
 				sub = seq.get(p);
-				sub.addToScore(n-1);				//  so we add n-1 to the previous location in seq to approximate number of words in that subseq
-				
-				sub = new Sequence(sourceText);
-				sub.addToScore(-0.5*d + n);			//  then add a negative representing the number of words between this position and the last
+				sub.addToScore(n-1);				//  so we add n-1 to the previous location in seq to approximate number of words in that subseq				
+				sub = new Sequence(sourceText);		//  and start a new sequence for the gap
+
+				double penalty = 0;
+				if (weightGaps) {									// if we want to weight gaps
+					while (gap > 0) {								// now, fill in the gaps for all the missing ngrams between last and this one
+						String missed = sourceText.get(last+gap);	// retrieve the ngram at this position
+						penalty -= scoreNGram(missed);				// get the penalty for missing this ngram
+						gap--;
+					}
+				} else penalty = -1 * gap;							// logs are VERY expensive, so maybe we skip that
+				penalty = penalty > -1*n ? 0 : penalty + n-1;		// ensure a penalty never ends up positive
+				sub.addToScore(penalty);				
 				seq.add(sub);
 				
 				sub = new Sequence(sourceText);		//  finally add a positive to start a new matching sequence at this position
@@ -179,8 +260,9 @@ public class Processor {
 	//  the more results, the less likely we care about this match, so it should count for less
 	//  the fewer results, the more interesting this match is, so it should count for more
 	//
-	private double scoreNGram (String ngram) {		
-		double v = 1.0;						// default score per match
+	private double scoreNGram (String ngram) {
+		// default score per match	
+		double v = 1.0;
 		
 		if (scoreByRarity) {
 			SearchResult searchResult = searchResults.get(ngram);
@@ -192,11 +274,93 @@ public class Processor {
 
 	// Find all the subsequences in a sequence
 	//
-	private Set<Sequence> findSubsequences (List<Sequence> seq) {		
+	private Set<Sequence> findSubsequences (List<Sequence> values) {
+		double current = 0;
+		double score = 0;
+		int end = 0;
+		
+		SourceText source = values.get(0).getSourceText();
+		Sequence sequence = new Sequence(source);
+		Set<Integer> positions = new HashSet<>();
+		Set<Sequence> sequences = new HashSet<>();
+		for (int i = 0; i < values.size(); i++) {
+			Sequence value = values.get(i);
+			current += value.score();
+			
+			if (value.score() > 0)							// If this is a positive value
+				positions.addAll(value.positions());		//  remember all the positions
+				
+			if (current > sequence.score()) {				// If we have a new max
+				sequence.add(positions);					//  add all the positions
+				sequence.setScore(current);					//  and set the current score
+				positions = new HashSet<>();				//  then start the positions anew
+				end = i;									//  and start the next sequence at the end of this one
+			}
+			
+			if (current <= 0 || i == values.size()-1) {		// If current drops below zero or the array is done
+				if (sequence.score() > minScore) {			//	if this sequenc'es score is greater than our minimum
+					sequences.add(sequence);				//   add it to the list of sequences
+					i = end;								//   and go back to where this sequence ended
+				}
+				current = 0;
+				sequence = new Sequence(source);
+				positions = new HashSet<>();
+			}
+		}
+		return sequences;
+	}
+
+	/*
+	private Set<Sequence> findSubsequences (List<Sequence> seq) {
+		double next = 0;
+		double score = 0;		
+		double current = 0;
+		
+		int start = 0;
+		int end = 0;
+		
+		SourceText source = seq.get(0).getSourceText();
+		Sequence sub = new Sequence(source);
+		Sequence val = null;
+		Set<Sequence> subSeq = new HashSet<>();
+		for (int i = 0; i < seq.size(); i++) {			
+			val = seq.get(i);
+			next = val.score();
+			
+			if (current == 0 && next > 0)
+				start = i;
+				
+			current += next;
+	
+			if (current > score) {
+				score = current;
+				end = i;
+			}
+			if (current <= 0 || i == seq.size()-1) {
+				if (score >= minScore) {
+					for (int s = start; s <= end; s++) {
+						val = seq.get(s);
+						if (val.score() > 0)
+							sub.add(val.positions());
+					}
+					i = end;
+					subSeq.add(sub);
+					sub.setScore(score);					
+					sub = new Sequence(source);
+				}
+				score = current = 0;
+			}
+		}
+		return subSeq;
+	}
+	//===========================================================//	
+/* Original busted
+	
+	private Set<Sequence> findSubsequences2 (List<Sequence> seq) {		
 		double next = 0;
 		double current = 0;
 		double score = 0;
-
+		
 		Sequence sub = null;
 		Sequence val = null;
 		Set<Sequence> subSeq = new HashSet<>();
@@ -231,8 +395,66 @@ public class Processor {
 		return subSeq;
 	}
 	//===========================================================//	
-
+/*
 	// OLD	
+	// Build a word value sequence from the matches of a particular URL
+	// For this, each Sequence object is actually just a value of the 
+	// number of consecutive words and the positions
+	//
+	private List<Sequence> buildNumericSequence (SourceFragment fragment) {
+		SourceText sourceText = fragment.getSourceText();
+		Set<Integer> positions = fragment.positionsInOrder();
+		List<Sequence> seq = new LinkedList<>();
+		
+		// skip fragments that have too few positions
+		if (positions.size() < lengthThreshold) return seq;
+		
+		// Build word sequence array
+		// Positives are number of matches in a row, negatives are number of mismatches in a row
+		//
+		Sequence sub = new Sequence(sourceText);
+		int n = sourceText.getN();
+		int p = 0;
+		int last = 0;
+		for (Integer i : positions) {
+			String ngram = sourceText.get(i);
+			double v = scoreNGram(ngram);
+			
+			int gap = i - last;						// distance between this position and the last position
+			p = seq.size() - 1;						// set to previous position		
+			if (seq.size() == 0) {					// if we're just starting, 
+				sub.add(v, i);						//  add our value for our first match
+				seq.add(sub);
+			} else if (gap < n)	{					// if the gap is less than n, this is an overlapping match
+				sub = seq.get(p);					//  first, get the last value
+				sub.add(v, i);						//	add this value to the sequence
+				gap--;								//	decrement d to start at the previous location
+				if (fillGaps) while (gap > 0) {		// now, fill in the gaps for all the ngrams between last and this one
+					ngram = sourceText.get(last+gap);	// I'm not really sure what effect this has, though
+					v = scoreNGram(ngram);			// I think I'm better off not doing it because of accidental overlaps
+					sub.add(v, last+gap);
+					gap--;
+				}
+			} else {								// not overlapping
+				sub = seq.get(p);
+				sub.addToScore(n-1);				//  so we add n-1 to the previous location in seq to approximate number of words in that subseq
+				
+				sub = new Sequence(sourceText);
+				sub.addToScore(-1.0*gap + n);		//  then add a negative representing the gap in words
+				seq.add(sub);
+				
+				sub = new Sequence(sourceText);		//  finally add a positive to start a new matching sequence at this position
+				sub.add(v, i);
+				seq.add(sub);
+			}
+			last = i;
+		}					
+		if (seq.size() > 0) {					// if we have a sequence of any size
+			p = seq.size() - 1;					//  set our position to the last position of the sequence
+			seq.get(p).addToScore(n-1);			//  add n-1 to our last subseq of matches to approximate number of words
+		}
+		return seq;
+	}
 
 	//===========================================================//
 	// Match each sequence to the offsets in the original source

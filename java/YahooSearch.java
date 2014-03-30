@@ -7,6 +7,7 @@
 package citeunseen;
  
 import java.util.*;
+import java.net.URLEncoder;
 
 // For JSON parsing
 import com.google.gson.*;
@@ -51,8 +52,10 @@ public class YahooSearch extends SearchEngine {
 	private  Map<String, String> setElements () {
 		Map<String, String> elements = new HashMap<>();
 		
-		elements.put("parentContainer",			"{\"bossresponse\":{\"responsecode\":\"200\",\"web\": }}");
-		elements.put("resultsContainer", 		"results");
+		elements.put("errorContainer",			"error");
+		elements.put("errorMessage",			"description");
+		elements.put("parentContainers",		"bossresponse web");
+		elements.put("resultsArray", 			"results");
 		elements.put("urlElement", 				"url");
 		elements.put("snippetElement", 			"abstract");
 		elements.put("totalResultsElement", 	"totalresults");
@@ -70,19 +73,27 @@ public class YahooSearch extends SearchEngine {
 
 	// Return an http getter with properly formatted query URL
 	@Override
- 	protected Map<String, String> buildQuery (String query, int id) {	
+ 	protected Map<String, String> buildQuery (String query, int id) {
 		String consumerKey = "REDACTED_YAHOO_CONSUMER_KEY";
 		String consumerSecret = "REDACTED_YAHOO_CONSUMER_SECRET";
+
+		String encodedQuery = "";
+		try {
+			encodedQuery = URLEncoder.encode(query, "UTF-8");
+		} catch (Exception e) {
+			Dev.out.println("Could not encode query: "+query);
+		}
 		
 		String headerName = "Accept";
 		String headerValue = "application/json";
-		String encodedQuery = "%22"+query.replaceAll(" ","%2B")+"%22";
 		String searchURL = "http://ysp.yahooapis.com/ysp/web?format=json&abstract=long&style=raw&q="+encodedQuery;
 		
 		OAuthConsumer consumer = new CommonsHttpOAuthConsumer(consumerKey, consumerSecret);
 		try {
 			searchURL = consumer.sign(searchURL);
-		} catch (Exception e) { e.getMessage();}	
+		} catch (Exception e) { 
+			Dev.out.println(e.getMessage());
+		}	
 
 		// Map of size 3 that will never grow
 		Map<String, String> queryData = new HashMap<>(3, 1.34f);

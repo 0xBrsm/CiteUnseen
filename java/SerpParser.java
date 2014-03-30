@@ -9,5 +9,6 @@ package citeunseen;
 public abstract class SerpParser {
 
 	abstract SearchResult parse (String serp);
+	abstract String parseError (String serp);
 
 }

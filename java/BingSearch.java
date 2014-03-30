@@ -45,11 +45,11 @@ public class BingSearch extends SearchEngine {
 	private  Map<String, String> setElements () {
 		Map<String, String> elements = new HashMap<>();
 		
-		elements.put("parentContainer",			"{\"d\":{\"results\":[ ]}}");
-		elements.put("resultsContainer", 		"Web");
-		elements.put("urlElement", 				"Url");
-		elements.put("snippetElement", 			"Description");
-		elements.put("totalResultsElement", 	"WebTotal");
+		elements.put("parentContainers",	"d results [0]");
+		elements.put("resultsArray", 		"Web");
+		elements.put("urlElement", 			"Url");
+		elements.put("snippetElement", 		"Description");
+		elements.put("totalResultsElement", "WebTotal");
 		
 		return elements;
 	}

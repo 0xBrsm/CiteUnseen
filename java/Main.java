@@ -28,23 +28,17 @@ public class Main {
 	public static void main (String[] args) throws Exception {	
 		// -- Set defaults for ease of runtime
 		int n = 3;							// default number of tokens		
-		int urlThreshold = 1;				// default minimum number of ngrams matched
-		int minScore = 8;					// default minimum document score to consider
 		Cache cache = Cache.USE;			// default, use cache if present - if not, search and save cache
 		boolean dumpNGrams = false;			// default not to save a file with all ngrams
 		boolean ignoreCitations = false;	// default search on citations
 		// --
 
 		// Start timer
-		Timer timer = new Timer("Main");		
+		Timer timer = Timer.startNew("Main").print();		
 		
 		// Initialize base objects	
 		Processor processor = new Processor();
 		SearchEngine engine = new GoogleSearch();
-		
-		// Set processor parameters
-		processor.setMinimumScore(minScore);
-		processor.setURLThreshold(urlThreshold);
 		
 		// Figure out what to do with input
 		//
@@ -57,37 +51,26 @@ public class Main {
 						case 'd': dumpNGrams = true; break;					
 						case 'i': cache = Cache.IMPORT; break;
 						case 'x': cache = Cache.EXPORT; break;
-						case 'n': n = Integer.parseInt(args[i].substring(3)); break;
-						case 'u': processor.setURLThreshold(Integer.parseInt(args[i].substring(3))); break;					
+						case 'n': n = Integer.parseInt(args[i].substring(3)); break;					
 						case 's': processor.setMinimumScore(Integer.parseInt(args[i].substring(3))); break;
 						case 'v': processor.setScoreByRarity(false); break;
+						case 'g': processor.setScoreGapsByRarity(true); break;						
 						case 'm': processor.setScoringMethod(args[i].substring(3)); break;								
 						case 'o': engine.setSnippetSearch(false); break;						
 						case 'c': engine.setMaxConnections(Integer.parseInt(args[i].substring(3))); break;
 						case 'r': engine.setMaxRetries(Integer.parseInt(args[i].substring(3))); break;
 						case 'e':
 							String e = args[i].substring(3);
-							if (e.equalsIgnoreCase("Bing")) {
-								engine = new BingSearch();
-								break;
-							} else if (e.equalsIgnoreCase("BingWeb")) {
-								engine = new BingWebSearch();
-								break;								
-							} else if (e.equalsIgnoreCase("FAROO")) {
-								engine = new FarooSearch();
-								break;								
-							} else if (e.equalsIgnoreCase("Google")) {
-								engine = new GoogleSearch();
-								break;
-							} else if (e.equalsIgnoreCase("Offline")) {
-								engine = new OfflineSearch();
-								break;							
-							} else if (e.equalsIgnoreCase("Yahoo")) {
-								engine = new YahooSearch();
-								break;
+							switch (e.toLowerCase()) {
+								case "bing"		:	engine = new BingSearch();break;
+								case "bingweb"	:	engine = new BingWebSearch();break;
+								case "faroo"	:	engine = new FarooSearch();break;
+								case "google"	:	engine = new GoogleSearch();break;
+								case "yahoo"	:	engine = new YahooSearch();break;
+								default			:
+									Dev.out.println("Illegal search engine specified: "+e);
+									return;
 							}
-							Dev.out.println("Illegal search engine specified: "+e);
-							return;
 						default:
 							Dev.out.println("Illegal argument: "+args[i]);
 							return;
@@ -100,47 +83,43 @@ public class Main {
 					}
 					fileName = args[i];
 			}
-			
-		String baseDir = "."+File.separator+"Documents"+File.separator;
-		String fileRoot = fileName.substring(0, fileName.lastIndexOf("."));
-		String fileRootPath = baseDir+fileRoot+File.separator+fileRoot;
-		String filePath = baseDir+fileRoot+File.separator+fileName;
+
+		File submission = new File(fileName);					// create a new file object for the submitted file
+		String cachePath = Dev.getCachePath(fileName);			// set the path for all output regarding this submission
+		String cacheRoot = Dev.getCacheRoot(submission);		// set the root file name and path for objects to be cached for this file
+		File localCopy = new File(cachePath, fileName);			// create a file object for the local cache of this file
+		
+		if (submission.exists())								// this is a newly submitted file
+				Dev.copyToCache(submission);						// make a cached copy of it
+		else 	submission = localCopy;							// or it's a reference to a previously cached file
 	
 		// Create our source text
-		File document = new File(filePath);
-		SourceText sourceText = new SourceText(document, n, ignoreCitations);
-		
-		
+		SourceText sourceText = new SourceText(submission, n, ignoreCitations);
 		
 		// dump all ngrams to a file if requested
-		if (dumpNGrams) sourceText.dumpNGrams(fileRootPath);
+		if (dumpNGrams) sourceText.dumpNGrams(cacheRoot);
 
 		// Set search parameters
-		engine.setCache(cache, fileRootPath+"."+n+"."+engine+".dat");
+		engine.setCache(cache, Dev.datPath(submission, n, engine));
 		engine.setConsole(true);
 			
 		// Get search results
 		Map<String, SearchResult> searchResults = engine.search(sourceText);
 		
 		// Use our search results to find all word sequences of any interest
-		Set<Sequence> sequences = processor.process(searchResults, sourceText);
+		Set<SourceFragment> sequences = processor.process(searchResults, sourceText);
 		
 		// Mark our sequences by their matching URLs in HTML format
-		Map<String, String> results = Builder.getHTMLResults(sequences, sourceText);
-
-//		Sequence[] array = sequences.toArray(new Sequence[0]);
-//		URLResult result = array[1].getBestResult();
-//		Map<String, String> results = Builder.getHTMLResults(result, sourceText);	
-//		Dev.out.println(result.getAsText());
+		Map<String, String> results = PageBuilder.getHTMLResults(sequences, sourceText);
 		
 		String summary = results.get("summary");
 		String markedText = results.get("markedText");
 
 		// Output results to HTML page
-		Builder.outputHTMLPage(summary, markedText, fileRootPath);
+		PageBuilder.outputHTMLPage(summary, markedText, cacheRoot);
 
 		// End our timer and output time to run, debug
 		//
-		timer.stop();
+		timer.stop().print("s");
 	}
 }
