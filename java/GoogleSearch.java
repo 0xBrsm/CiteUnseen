@@ -23,7 +23,7 @@ public class GoogleSearch extends SearchEngine {
 	// For consistency, this is found by searching for "a"
 	// and using the number of returned results.
 	//
-	private static final long INDEX_SIZE = 3700000000L;
+	private static final long INDEX_SIZE = 5800000000L;
 	
 	// Hold the engine-specific search result elements
 	// and parser used to extract information
@@ -44,7 +44,9 @@ public class GoogleSearch extends SearchEngine {
 	private  Map<String, String> setElements () {
 		Map<String, String> elements = new HashMap<>();
 		
-		elements.put("resultsContainer", 		"items");
+		elements.put("errorContainer",			"error");
+		elements.put("errorMessage",			"message");
+		elements.put("resultsArray", 			"items");
 		elements.put("urlElement", 				"link");
 		elements.put("snippetElement", 			"snippet");
 		elements.put("informationContainer", 	"searchInformation");		
@@ -61,6 +63,7 @@ public class GoogleSearch extends SearchEngine {
 	// Implementation of abstract methods
 	//
 
+	// 12-2-2020 added: API is steam-strategy-453 citeunseen-1-13
 	// Return an http getter with properly formatted query URL
 	@Override
  	protected Map<String, String> buildQuery (String query, int id) {
