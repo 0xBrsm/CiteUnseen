@@ -119,11 +119,11 @@ $(function() {
 	<div id="corpus-container" class="property-container" title="Search provider or offline corpus to search.">
 <!--		<label for="search-corpus">Search</label> -->
 		<select id="search-corpus" name="searchEngine">
-			<option value="bing">Bing Search</option>		
+			<option value="bing" disabled>Bing Search</option>		
 			<option value="google" selected>Google Custom Search</option>
-			<option value="yahoo">Yahoo! BOSS Search</option>
-			<option value="COPSA">COPSA (offline)</option>
-			<option value="Webis-CPC-11">Webis-CPC-11 (offline)</option>			
+			<option value="yahoo" disabled>Yahoo! BOSS Search</option>
+			<option value="COPSA" disabled>COPSA (offline)</option>
+			<option value="Webis-CPC-11" disabled>Webis-CPC-11 (offline)</option>			
 		</select>
 	</div> <!-- word-threshold-container -->	
 </div>

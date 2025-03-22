@@ -35,8 +35,6 @@ $(function() {
     });
 	
 	$("form").submit(function( event ) {
-		alert('Public access is currently disabled. Sorry!');
-		return false;	
 		$("#results-frame").contents().find("div#results").html("<p>Processing, please wait...<p>");
 	});
 });
