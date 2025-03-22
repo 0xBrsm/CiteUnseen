@@ -27,7 +27,8 @@ import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.analysis.shingle.ShingleFilter;
-import org.apache.lucene.analysis.util.CharArraySet;
+import org.apache.lucene.analysis.CharArraySet;
+import org.apache.lucene.analysis.CharArraySet;
 import org.apache.lucene.util.Version;
 import org.apache.lucene.analysis.tokenattributes.*;
 import org.apache.tika.*;
@@ -38,7 +39,7 @@ public class SourceText implements TokenizedText {
 	private final Map<String, NGram> nGrams = new HashMap<>();
 	private final ArrayList<NGram> nGramsList = new ArrayList<>();
 	private final ArrayList<OffsetAttribute> offsetsList = new ArrayList<>();
-	private final Analyzer analyzer = new StandardAnalyzer(Version.LUCENE_46, CharArraySet.EMPTY_SET);
+	private final Analyzer analyzer = new StandardAnalyzer(CharArraySet.EMPTY_SET);
 	private final int n;
 
 	// Create our Tika parser for parsing non-strings
