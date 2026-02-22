@@ -74,8 +74,8 @@ public class YahooSearch extends SearchEngine {
 	// Return an http getter with properly formatted query URL
 	@Override
  	protected Map<String, String> buildQuery (String query, int id) {
-		String consumerKey = "REDACTED_YAHOO_CONSUMER_KEY";
-		String consumerSecret = "REDACTED_YAHOO_CONSUMER_SECRET";
+		String consumerKey = Credentials.required("CITEUNSEEN_YAHOO_CONSUMER_KEY");
+		String consumerSecret = Credentials.required("CITEUNSEEN_YAHOO_CONSUMER_SECRET");
 
 		String encodedQuery = "";
 		try {

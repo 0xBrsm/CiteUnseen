@@ -67,7 +67,7 @@ public class FarooSearch extends SearchEngine {
 	// Return an http getter with properly formatted query URL
 	@Override
  	protected Map<String, String> buildQuery (String query, int id) {	
-		String accountKey = "REDACTED_FAROO_API_KEY";
+		String accountKey = Credentials.required("CITEUNSEEN_FAROO_API_KEY");
 				
 		String headerName = "Accept";
 		String headerValue = "application/json";

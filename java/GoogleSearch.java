@@ -67,8 +67,8 @@ public class GoogleSearch extends SearchEngine {
 	// Return an http getter with properly formatted query URL
 	@Override
  	protected Map<String, String> buildQuery (String query, int id) {
-		String cx = "013476539332271337914:qdvq0snx-he";
-		String key = "REDACTED_GOOGLE_API_KEY";
+		String cx = Credentials.required("CITEUNSEEN_GOOGLE_CX");
+		String key = Credentials.required("CITEUNSEEN_GOOGLE_API_KEY");
 
 		String headerName = "Accept";
 		String headerValue = "application/json";
